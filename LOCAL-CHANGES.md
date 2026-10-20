@@ -14,8 +14,8 @@
 - 独立具名会话、每会话队列、默认 4 会话/16 请求/空闲 300 秒回收；新增 vnc_sessions。
 - 修复首次并发连接重复启动全局 reactor；关闭槽位在清理完成前不得复用，失败清理隔离容量。
 
-2026-10-20 项目化整理将上述代码从 VMware_Personal 复制到 VMware_VNC。运行模块、main.py、包定义、固定依赖和许可证保持一致。重建环境，调整维护脚本及配置路径；性能和启动竞态的历史对照代码改为项目内固定测试样本。
+2026-10-20 项目化整理将上述代码从 VMware_Personal 完整移植到 VMware_VNC。运行模块、main.py、包定义、固定依赖和许可证保持一致。重建环境，调整维护脚本及配置路径；性能和启动竞态的历史对照代码改为项目内固定测试样本。
 
-迁移前报告、补丁、完整源码备份和截图保存在 `.local/history/`，保持原始内容，旧路径仅表示当时状态。原始 README 另存为 `docs/README-before-project-migration.md`，其中旧路径和上游 EXE 示例属于历史说明，不是当前项目的安装入口。当前工作方式以 README.md、AGENTS.md、docs/STATUS.md 为准。
+VNC 调查报告位于 `docs/reports/`，测试结果、截图及补丁位于 `checks/results/`，手动操作场景位于 `.local/scenarios/`。按用户要求，旧代码和环境、重复归档、配置备份及临时验证目录已清除，仅以本项目维护。报告中的旧路径表示当时状态，当前工作方式以 README.md、AGENTS.md、docs/STATUS.md 为准。
 
 运行依赖版本由 requirements.lock.txt 固定；维护检查仅使用现有依赖。尚未解决中文直接输入、中文剪贴板、持久增量帧与长期运行验证边界。

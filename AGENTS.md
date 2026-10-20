@@ -1,6 +1,6 @@
 # VMware VNC 维护约定
 
-- 该目录是 VNC MCP 的主维护项目；旧 VMware_Personal 副本保留作迁移回退。
+- 该目录是 VNC MCP 的唯一维护项目；本次迁移不保留旧副本或迁移备份。
 - 默认使用 PowerShell 7。环境用 `scripts/Setup.ps1` 重建，不复制 `.venv`。
 - 结构性代码查询使用已安装的 codebase-memory 技能；先核对索引根目录和覆盖情况。
 - 核心运行代码位于 `src/vnc_mcp`，`main.py` 是本地入口。不要把业务逻辑放入启动脚本。

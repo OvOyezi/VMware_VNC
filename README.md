@@ -70,9 +70,10 @@ CLI 单张截图示例：
 | scripts/ | 环境安装和回归入口 |
 | checks/ | 协议、并发、生命周期及显式实机验证工具 |
 | docs/ | 维护状态与迁移记录 |
-| .local/history/ | 迁移前的原始报告、截图、补丁和备份，仅本机保存 |
+| docs/reports/ | VNC 调查与验证报告 |
+| .local/ | 本机连接资料及手动操作场景 |
 
-`.venv/`、`.local/`、`checks/results/` 和构建产物均排除在 Git 外。原目录保留回退副本，后续代码维护在本项目进行。迁移结果见 [维护状态](docs/STATUS.md)，来源及本地差异见 [LOCAL-CHANGES.md](LOCAL-CHANGES.md)。
+`.venv/`、`.local/`、`checks/results/` 和构建产物均排除在 Git 外。VNC 文件已完整迁入本目录，旧代码、旧环境、迁移备份和临时验证目录已清除。迁移结果见 [维护状态](docs/STATUS.md)，来源及本地差异见 [LOCAL-CHANGES.md](LOCAL-CHANGES.md)。
 
 ## 已知边界
 

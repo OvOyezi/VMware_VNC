@@ -1,0 +1,9 @@
+# Generated for this skill installation. Select the target explicitly when connecting.
+[mcp_servers.vmware_vnc]
+command = {{PYTHON_COMMAND}}
+args = [{{ENTRY_POINT}}, "mcp"]
+cwd = {{SKILL_ROOT}}
+
+[mcp_servers.vmware_vnc.env]
+VNC_TIMEOUT = "5"
+VNC_SCREENSHOT_MODE = "fresh"

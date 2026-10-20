@@ -1,6 +1,29 @@
 # 维护状态
 
-更新日期：2026-10-20，Asia/Shanghai。
+更新日期：2026-10-21，Asia/Shanghai。
+
+## 2026-10-21 技能化整理
+
+仓库根目录现在是 `vmware-vnc` 技能，包含 SKILL.md、agents/openai.yaml、references、assets、scripts 和唯一一份 src/vnc_mcp。新增脚本只生成按实际安装位置定位的 MCP 片段，不修改 Codex 配置。
+
+本次在本地分支 `codex/package-vmware-vnc-skill` 整理，未配置远程、未上传 GitHub、未实际安装到用户技能目录。运行代码、包版本和固定依赖未调整。
+
+本次已验证：
+
+- skill-creator 的 quick_validate 通过，技能与安装文档的 17 个本地链接均可解析，默认允许自动发现。
+- 原维护目录的 scripts/Test.ps1 全部通过：基础 10、生命周期 18、深挖 16、多会话 21，合计 65 项模拟检查。
+- 从 Git 索引导出 45 个文件，确认不含 `.venv`、`.local`、检查结果、截图或凭据文件；以该导出替代网络下载，复用本机官方 skill-installer 的根目录参数解析、目录校验和复制流程完成隔离安装。没有访问 GitHub 下载端点。
+- 隔离目录含中文、空格和单引号，重新运行 Setup 完成环境重建，39 个固定运行依赖逐一一致，pip check、外部工作目录导入与 CLI 通过；安装副本的完整 65 项模拟检查同样通过。
+- 新脚本在外部工作目录生成的 TOML 可解析，command、args、cwd 均定位安装副本。按该片段启动 MCP，初始化并列出 18 个工具成功，无默认目标，缺少端点的连接请求被拒绝。
+- 生成配置前没有环境时，脚本明确失败。全局 Codex 配置的 SHA-256 在隔离验证前后保持一致。真实虚拟机未连接，当前聊天的 MCP 未重新加载。
+
+本机证据为 [安装验证摘要](../checks/results/skill-package-validation.json)、[隔离安装测试输出](../checks/results/skill-package-tests.stdout.log)及 `checks/results/skill-installed-*.json`；它们均不进入 Git。临时安装副本在验证后清除，不作为第二维护位置或备份保留。
+
+本次没有真实虚拟机桌面操作授权，不执行真实端点连接、截图或输入。以下迁移记录保留其历史结论，不代表本次已重新完成实机验证。
+
+## 2026-10-20 迁移记录
+
+以下为当时的维护状态；其中分支、路径、端点和配置加载情况以当时证据为准。
 
 主维护根目录：`C:\Users\Administrator\Documents\VMware_VNC`。本地 Git 分支为 main，未配置远程仓库。本项目是唯一的 VNC 维护位置；旧 VNC 副本、环境、备份和临时验证目录已清除。
 

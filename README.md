@@ -1,84 +1,110 @@
-# VMware VNC
+# VMware VNC Skill
 
-用于长期维护的 VMware 通用 VNC MCP 项目。主目录：`C:\Users\Administrator\Documents\VMware_VNC`。基于固定上游源码和本地验证过的改动，使用独立 Python 环境，通过 stdio 提供 MCP 工具，也提供 CLI。
+一个可独立安装的 `vmware-vnc` 技能，附带 VNC MCP 服务与 CLI。在 Windows 上通过截图与键鼠操作 VMware 或其他 VNC 桌面，支持多个虚拟机的独立会话、原生尺寸全图和区域截图。
 
-支持多台虚拟机的独立会话、原生尺寸全图/区域截图、键鼠和 Latin-1 剪贴板。不会接管宿主机的全局鼠标。
+| 项目 | 说明 |
+| --- | --- |
+| 技能名 | `vmware-vnc`，仓库根目录就是技能目录 |
+| 分类 | 开发工具 / 虚拟机桌面自动化 |
+| 接入方式 | Codex skill + 本地 stdio MCP，或独立 CLI |
+| 环境 | Windows、PowerShell 7、Python 3.11+；本机验证环境为 Python 3.15.0 |
+| 许可证 | Apache-2.0，保留上游署名与本地修改记录 |
+| 发布状态 | 仅本地 Git；尚未配置远程或发布 GitHub 仓库 |
 
-## 开发与验证
+## 安装技能
 
-在本目录使用 PowerShell 7；维护检查要求 Python 3.11+，本机验收使用 Python 3.15.0。
+### 从本地 Git 安装
+
+本项目已经是本地 Git 仓库。以下命令把已提交的文件安装到一个技能目录，不会复制源码工作区中的 `.venv`、`.local`、截图或检查结果。替换 `$repository` 为本地仓库路径；目标目录须尚不存在。
 
 ```powershell
-pwsh -NoProfile -File .\scripts\Setup.ps1
-pwsh -NoProfile -File .\scripts\Test.ps1
-.\.venv\Scripts\vnc-mcp.exe --help
+$repository = 'C:/path/to/VMware_VNC'
+$skillRoot = "$env:USERPROFILE/.agents/skills/vmware-vnc"
+git clone --local --no-hardlinks "$repository" "$skillRoot"
+pwsh -NoProfile -File "$skillRoot/scripts/Setup.ps1"
+pwsh -NoProfile -File "$skillRoot/scripts/Test.ps1"
 ```
 
-如果 `python` 不是需要的解释器，可给 Setup 传 `-PythonExecutable` 指定完整路径。Setup 重建或复用本目录 `.venv`，按 `requirements.lock.txt` 安装固定运行依赖，再将当前源码以 editable 方式安装。源码变更不需要重新拷贝包；已运行的 MCP 进程仍需要重新加载。
+`git clone` 获取当前分支已提交的版本；先提交要安装的更改。该副本用于安装，源项目继续作为唯一维护位置。
 
-Test 默认只连接临时的本机模拟 RFB 服务，不操作真实虚拟机。结果在 `checks/results/project-*.json`。性能比较所需的两个历史后端固定在 `checks/fixtures/baselines/`，测试不依赖旧工作区或临时下载目录。
+技能目录遵循 [OpenAI 官方技能文档](https://learn.chatgpt.com/docs/build-skills)。按实际宿主选择安装位置：当前文档使用 `~/.agents/skills`；本机捆绑的 skill-installer 默认使用 `$CODEX_HOME/skills`，未设置时为 `~/.codex/skills`。选择一种即可，避免重复安装同名技能。
 
-## MCP 接入
+### 将来从 GitHub 安装
 
-`codex-mcp.toml` 提供本机配置示例，入口为 `vmware_vnc`。启动解释器、main.py 和 cwd 均指向当前项目。不指定默认目标；每次连接明确传地址和端口。配置字段按 [OpenAI 官方 MCP 文档](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)核对。
+上传自己的仓库后，可向 Codex 的 `$skill-installer` 提供真实 GitHub 地址，要求安装根目录 `.`，名称为 `vmware-vnc`。其脚本参数为：
 
-示例 MCP 调用（替换各自连接返回的 ID）：
+```text
+--repo OWNER/REPO --path . --name vmware-vnc
+```
+
+`OWNER/REPO` 是待替换值，目前没有可用的本项目在线安装地址。不要改用上游 VNC-MCP 的地址；上游仓库没有本技能的入口与本地修改。安装后仍需在技能目录运行 Setup。
+
+## 配置 MCP
+
+技能提供操作流程；附带的 MCP 服务提供实际工具。仅安装技能不会自动注册 MCP。
+
+```powershell
+pwsh -NoProfile -File "$skillRoot/scripts/Get-McpConfig.ps1"
+```
+
+该命令只输出按安装位置生成的 TOML 片段，不修改 Codex 全局配置，不设置默认虚拟机，也不保存密码。需要接入时，将片段合并到选定的 Codex 配置，保留其他条目，再核对 MCP 初始化与当前聊天的工具加载状态。详见 [安装与接入](references/setup.md)和 [OpenAI MCP 文档](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)。
+
+如果只是维护当前仓库，可直接在仓库根目录执行：
+
+```powershell
+pwsh -NoProfile -File ./scripts/Setup.ps1
+pwsh -NoProfile -File ./scripts/Test.ps1
+pwsh -NoProfile -File ./scripts/Get-McpConfig.ps1
+```
+
+Python 不在 PATH 或需要选择版本时，给 Setup 传入 `-PythonExecutable`。环境在当前目录重建，不搬运其他安装的 `.venv`。依赖固定在 `requirements.lock.txt`。
+
+## 使用
+
+在 Codex 中调用 `$vmware-vnc`，说明目标地址、端口和任务。真实桌面 Computer Use 必须取得用户明确同意使用它的确切答复；同意安装、配置或笼统同意方案，不等于授权桌面操作。
+
+MCP 示例（先确认端点，再替换返回的 ID）：
 
 ```python
 vnc_connect(host="127.0.0.1", port=5901, session_id="WIN11")
-vnc_screenshot(session_id="WIN11", connection_id="<WIN11 返回的 ID>")
-vnc_connect(host="127.0.0.1", port=5902, session_id="WIN10")
-vnc_screenshot(session_id="WIN10", connection_id="<WIN10 返回的 ID>")
-vnc_sessions()
+vnc_screenshot(session_id="WIN11", connection_id="<本次连接返回的 ID>")
+vnc_disconnect(session_id="WIN11", connection_id="<同一个 ID>")
 ```
 
-端口以对应虚拟机实际配置为准，同一宿主机不应重复。省略 session_id 使用独立的兼容 default 会话。具名会话除连接、状态和列表外，必须同时传 session_id 和 connection_id。重连生成新 ID，旧请求不得自动重放。
+连接后先截图核对目标。具名会话的截图、输入、等待和断开始终同时携带 session_id、connection_id。多虚拟机分别记录 ID；重连后旧 ID 失效，不自动重放失败或取消的输入。完整流程见 [SKILL.md](SKILL.md)，具体参数见 [操作参考](references/operations.md)。
 
-默认最多 4 个会话、每会话 16 个未完成调用（包含异步等待）。空闲 300 秒后回收，扫描间隔不超过 30 秒；活动调用和等待不会被误回收。回收会释放保持的键鼠输入。会话列表提供缓存状态，实时状态用 `vnc_status(session_id=...)`。
+VMware 的电源、快照和来宾命令使用官方 vmrun；需要桌面画面时使用 VNC。本技能安装和默认测试不启动、连接或修改真实虚拟机。
 
-| 环境变量 | 默认 | 含义 |
-| --- | --- | --- |
-| VNC_TIMEOUT | 15 秒；本机配置为 5 | 单步网络等待 |
-| VNC_ACTION_TIMEOUT | 20 秒 | 协作式操作预算 |
-| VNC_SCREENSHOT_MODE | refresh；本机配置为 fresh | fresh 以独立共享连接获取首帧 |
-| VNC_MAX_SESSIONS | 4 | 会话数量上限，1–32 |
-| VNC_IDLE_TIMEOUT | 300 秒 | 空闲回收，0 禁用 |
-| VNC_HOST / VNC_PORT | 无 | 可选默认目标；当前配置不设置 |
-| VNC_PASSWORD / VNC_PASSWORD_ENV | 无 / VNC_PASSWORD | 可选认证凭据，不写入版本库 |
+## 目录分类
 
-## 只读实机验收
-
-明确端点后运行下列命令，连接及截图测试不会发送键鼠输入：
-
-```powershell
-.\.venv\Scripts\python.exe .\checks\vnc_mcp_multisession_live.py --config "$env:USERPROFILE\.codex\config.toml" --host 127.0.0.1 --targets WIN11=5901 WIN10=5902 --output .\checks\results\project-live.json
+```text
+.
+├── SKILL.md                  技能入口、触发条件、授权与操作流程
+├── agents/openai.yaml        Codex 界面元数据
+├── references/               安装接入、操作参数、故障排查
+├── assets/                   MCP 配置模板
+├── scripts/                  环境安装、配置生成、模拟回归入口
+├── src/vnc_mcp/              唯一一份运行源码
+├── main.py                   本地启动入口
+├── pyproject.toml            Python 包与 CLI 入口
+├── requirements.lock.txt     固定运行依赖
+├── checks/                   模拟回归、显式实机验收及历史调查工具
+├── docs/                     维护状态、迁移记录与原始报告
+└── LICENSE / NOTICE          上游许可证和署名
 ```
 
-CLI 单张截图示例：
+`.venv/`、`.local/`、`checks/results/`、索引和构建产物均排除在 Git 外。源码、固定依赖、测试样本和许可证随技能一起安装；不依赖原作者绝对路径。原始调查报告保留当时的路径与结论，当前使用方式以 SKILL.md 和 references 为准。
 
-```powershell
-.\.venv\Scripts\vnc-mcp.exe screenshot --host 127.0.0.1 --port 5901 --screenshot-mode fresh --format jpeg --output .\checks\results\screen.jpg
-```
+检查脚本按模拟回归、显式端点验收和历史调查工具分类，详见 [checks/README.md](checks/README.md)。
 
-## 项目布局
+## 验证与限制
 
-| 路径 | 用途 |
-| --- | --- |
-| src/vnc_mcp/ | 运行代码：MCP、会话、调度、VNC、图像与 CLI |
-| main.py / pyproject.toml | 本地入口和包定义 |
-| requirements.lock.txt | 固定的运行依赖 |
-| scripts/ | 环境安装和回归入口 |
-| checks/ | 协议、并发、生命周期及显式实机验证工具 |
-| docs/ | 维护状态与迁移记录 |
-| docs/reports/ | VNC 调查与验证报告 |
-| .local/ | 本机连接资料及手动操作场景 |
+`scripts/Test.ps1` 默认仅连接本机临时人工 RFB 服务，覆盖 MCP 协议、连接生命周期、取消、队列与多会话隔离。运行结果在 `checks/results/project-*.json`。历史性能与竞态对照样本固定在 `checks/fixtures/baselines/`，不依赖旧工作区。
 
-`.venv/`、`.local/`、`checks/results/` 和构建产物均排除在 Git 外。VNC 文件已完整迁入本目录，旧代码、旧环境、迁移备份和临时验证目录已清除。迁移结果见 [维护状态](docs/STATUS.md)，来源及本地差异见 [LOCAL-CHANGES.md](LOCAL-CHANGES.md)。
+真实端点测试需明确目标及授权，不能把模拟通过写成真实虚拟机兼容性通过；具体命令见 [操作参考](references/operations.md)。当前与历史验收分开记录在 [维护状态](docs/STATUS.md)。
 
-## 已知边界
+中文直接输入尚未通过 VMware 验证，剪贴板仅支持 Latin-1。fresh 截图仍传输完整首帧；协作取消不能撤回已发送输入。长期运行、真实网络故障及 Codex 模型 WebSocket 问题不属于默认回归的验证范围。
 
-VMware 端此前未接受直接发送的中文 Unicode 键盘字符，剪贴板仅支持 Latin-1。中文输入法可能转换字母输入，发送命令前应确认英文输入状态。JPEG 默认质量 80、4:4:4，不缩放；精确像素检查可用 PNG。区域截图返回原点，鼠标坐标始终是桌面原生坐标。
+## 来源
 
-fresh 仍会传输完整首帧；没有用旧缓存冒充新截图。协作取消不能撤回已发送的输入，单步网络等待与编码也不能被强行抢占。多小时运行、真实网络故障和 Codex 模型 WebSocket 问题没有因本次迁移获得验证。
-
-上游为 [thanhvn-shinkoxd/VNC-MCP](https://github.com/thanhvn-shinkoxd/VNC-MCP/tree/abe747b4dc42bc936870959861a436c849aef482)，固定提交 `abe747b4dc42bc936870959861a436c849aef482`。保留原作者署名、Apache-2.0 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。
+基于 [thanhvn-shinkoxd/VNC-MCP](https://github.com/thanhvn-shinkoxd/VNC-MCP/tree/abe747b4dc42bc936870959861a436c849aef482)，固定提交 `abe747b4dc42bc936870959861a436c849aef482`。保留原作者的 [LICENSE](LICENSE)、[NOTICE](NOTICE)；本地差异见 [LOCAL-CHANGES.md](LOCAL-CHANGES.md)。本项目与上游仓库分别维护。

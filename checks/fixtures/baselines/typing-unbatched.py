@@ -1,0 +1,387 @@
+"""Synchronous VNC session wrapper around vncdotool."""
+
+from __future__ import annotations
+
+from io import BytesIO
+import threading
+import time
+from typing import Any
+
+from vncdotool import api
+from vncdotool.client import VNCDoToolClient, VNCDoToolFactory
+from twisted.internet import reactor
+
+
+class _ClipboardClient(VNCDoToolClient):
+    def connectionMade(self) -> None:
+        self.factory.active_protocol = self
+        if self.factory.close_requested:
+            self.transport.abortConnection()
+            return
+        super().connectionMade()
+
+    def connectionLost(self, reason: Any) -> None:
+        self.factory.closed.set()
+        super().connectionLost(reason)
+
+    def copy_text(self, text: str) -> None:
+        self.factory.latest_clipboard = text
+
+    def capture_encoded(self, output: BytesIO, image_format: str, quality: int) -> Any:
+        # Keep the proxy's Deferred result as the protocol, just as captureScreen
+        # does. Encode on the reactor thread after a complete framebuffer update.
+        def encode(result: Any) -> _ClipboardClient:
+            if self.screen is None:
+                raise RuntimeError("VNC server did not provide a framebuffer")
+            options = {"quality": quality, "subsampling": 0, "optimize": True} if image_format == "jpeg" else {}
+            self.screen.save(output, format=image_format.upper(), **options)
+            return self
+
+        deferred = self.refreshScreen(incremental=False)
+        deferred.addCallback(encode)
+        return deferred
+
+    def unicode_key(self, codepoint: int) -> _ClipboardClient:
+        # vncdotool's synchronous proxy chains method return values through its
+        # connection Deferred. Raw keyEvent returns None and breaks that chain.
+        # Emit both events on the reactor thread, then preserve the protocol.
+        keysym = 0x01000000 | codepoint
+        self.keyEvent(keysym, down=True)
+        self.keyEvent(keysym, down=False)
+        return self
+
+
+class _ClipboardFactory(VNCDoToolFactory):
+    protocol = _ClipboardClient
+    force_caps = True
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.latest_clipboard = ""
+        self.closed = threading.Event()
+        self.close_requested = False
+        self.active_protocol: _ClipboardClient | None = None
+
+
+class VNCSession:
+    def __init__(self, timeout: float = 15.0, screenshot_mode: str = "refresh") -> None:
+        if screenshot_mode not in {"refresh", "fresh"}:
+            raise ValueError("screenshot_mode must be refresh or fresh")
+        self.timeout = timeout
+        self.screenshot_mode = screenshot_mode
+        self.client: Any | None = None
+        self.host: str | None = None
+        self.port: int | None = None
+        self.name: str | None = None
+        self.width: int | None = None
+        self.height: int | None = None
+        self._lock = threading.RLock()
+        self._held_keys: set[str] = set()
+        self._held_buttons: set[str] = set()
+
+    def connect(self, host: str, port: int = 5900, password: str | None = None) -> dict[str, Any]:
+        if not host.strip():
+            raise ValueError("host must not be empty")
+        if not 1 <= port <= 65535:
+            raise ValueError("port must be between 1 and 65535")
+        with self._lock:
+            self.disconnect()
+            endpoint_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+            endpoint = f"{endpoint_host}::{port}"
+            self.client = api.connect(
+                endpoint,
+                password=password,
+                timeout=self.timeout,
+                factory_class=_ClipboardFactory,
+            )
+            try:
+                # api.connect starts the background reactor; an initial refresh waits
+                # for protocol negotiation and the server's first framebuffer update.
+                self._call("refreshScreen", incremental=False)
+            except Exception:
+                self.disconnect()
+                raise
+            self.host, self.port = host, port
+            raw_name = getattr(self.client.protocol, "name", "")
+            self.name = raw_name.decode("utf-8", "replace") if isinstance(raw_name, bytes) else str(raw_name)
+            screen = getattr(self.client.protocol, "screen", None)
+            if screen is not None:
+                self.width, self.height = screen.size
+            return self.status()
+
+    def disconnect(self) -> dict[str, Any]:
+        with self._lock:
+            client, self.client = self.client, None
+            keys, buttons = tuple(self._held_keys), tuple(self._held_buttons)
+            self._held_keys.clear()
+            self._held_buttons.clear()
+            self.host = self.port = self.name = self.width = self.height = None
+            if client is not None:
+                self._close_client(client, keys, buttons)
+            return self.status()
+
+    def _close_client(self, client: Any, keys: tuple = (), buttons: tuple = ()) -> None:
+        # The upstream synchronous disconnect is chained behind pending commands.
+        # A timeout or failed Deferred can therefore prevent it from closing at
+        # all. Close the transport directly on its owning reactor thread instead.
+        client.factory.close_requested = True
+        finished = threading.Event()
+
+        def close() -> None:
+            try:
+                protocol = client.factory.active_protocol
+                transport = getattr(protocol, "transport", None)
+                if transport is not None and transport.connected:
+                    for method, value in [("keyUp", key) for key in keys] + [
+                        ("mouseUp", {"left": 1, "middle": 2, "right": 3}[button]) for button in buttons
+                    ]:
+                        try:
+                            getattr(protocol, method)(value)
+                        except Exception:
+                            pass
+                    transport.loseConnection()
+            finally:
+                finished.set()
+
+        reactor.callFromThread(close)
+        finished.wait(timeout=self.timeout)
+
+    def status(self) -> dict[str, Any]:
+        with self._lock:
+            if self.client is not None and self.client.factory.closed.is_set():
+                return self.disconnect()
+            screen = getattr(getattr(self.client, "protocol", None), "screen", None)
+            if screen is not None and (self.screenshot_mode == "refresh" or self.width is None or self.height is None):
+                self.width, self.height = screen.size
+            return {
+                "connected": self.client is not None,
+                "screenshot_mode": self.screenshot_mode,
+                "host": self.host,
+                "port": self.port,
+                "name": self.name,
+                "width": self.width,
+                "height": self.height,
+            }
+
+    def _require_client(self) -> Any:
+        if self.client is not None and self.client.factory.closed.is_set():
+            self.disconnect()
+        if self.client is None:
+            raise ConnectionError("Not connected; call vnc_connect first")
+        return self.client
+
+    def _call(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        client = self._require_client()
+        try:
+            return getattr(client, method)(*args, **kwargs)
+        except Exception as exc:
+            # Never reuse a possibly failed proxy queue or replay input. The
+            # caller must explicitly select and reconnect the intended desktop.
+            self.disconnect()
+            raise ConnectionError(f"{type(exc).__name__}: {exc}; connection cleared, call vnc_connect again") from exc
+
+    def screenshot(self, image_format: str = "png", quality: int = 80) -> tuple[bytes, int, int]:
+        image_format = image_format.lower()
+        if image_format not in {"png", "jpeg"}:
+            raise ValueError("image_format must be jpeg or png")
+        if not 1 <= quality <= 95:
+            raise ValueError("quality must be between 1 and 95")
+        with self._lock:
+            client = self._require_client()
+            output = BytesIO()
+            if self.screenshot_mode == "fresh":
+                # Some VMware VNC servers do not answer repeated full-refresh
+                # requests on an unchanged display. Obtain the initial full
+                # frame on a separate shared connection, keeping held input
+                # and the control channel intact.
+                endpoint_host = f"[{self.host}]" if ":" in self.host and not self.host.startswith("[") else self.host
+                snapshot = api.connect(
+                    f"{endpoint_host}::{self.port}",
+                    password=client.factory.password,
+                    timeout=self.timeout,
+                    factory_class=_ClipboardFactory,
+                )
+                try:
+                    snapshot.capture_encoded(output, image_format, quality)
+                    screen = snapshot.protocol.screen
+                    self.width, self.height = screen.size
+                finally:
+                    self._close_client(snapshot)
+            else:
+                self._call("capture_encoded", output, image_format, quality)
+            image_data = output.getvalue()
+            if self.screenshot_mode == "refresh":
+                screen = getattr(client.protocol, "screen", None)
+                if screen is not None:
+                    self.width, self.height = screen.size
+            if not self.width or not self.height:
+                raise RuntimeError("VNC client did not report screen dimensions")
+            return image_data, self.width, self.height
+
+    def _check_point(self, x: int, y: int) -> None:
+        client = self._require_client()
+        screen = getattr(client.protocol, "screen", None)
+        if screen is not None and (self.screenshot_mode == "refresh" or self.width is None or self.height is None):
+            self.width, self.height = screen.size
+        if self.width is not None and self.height is not None:
+            if not (0 <= x < self.width and 0 <= y < self.height):
+                raise ValueError(f"coordinates must be within {self.width}x{self.height}")
+
+    def click(self, x: int, y: int, button: str = "left", count: int = 1) -> dict[str, Any]:
+        buttons = {"left": 1, "middle": 2, "right": 3}
+        if button not in buttons:
+            raise ValueError("button must be left, middle, or right")
+        if not 1 <= count <= 3:
+            raise ValueError("count must be between 1 and 3")
+        with self._lock:
+            self._check_point(x, y)
+            self._call("mouseMove", x, y)
+            for _ in range(count):
+                self._call("mousePress", buttons[button])
+            return {"clicked": button, "count": count, "x": x, "y": y}
+
+    def move(self, x: int, y: int) -> dict[str, Any]:
+        with self._lock:
+            self._check_point(x, y)
+            self._call("mouseMove", x, y)
+            return {"moved": True, "x": x, "y": y}
+
+    def drag(self, x1: int, y1: int, x2: int, y2: int, button: str = "left") -> dict[str, Any]:
+        buttons = {"left": 1, "middle": 2, "right": 3}
+        if button not in buttons:
+            raise ValueError("button must be left, middle, or right")
+        with self._lock:
+            self._check_point(x1, y1)
+            self._check_point(x2, y2)
+            self._call("mouseMove", x1, y1)
+            self._call("mouseDown", buttons[button])
+            distance = max(abs(x2 - x1), abs(y2 - y1))
+            step = max(1, (distance + 29) // 30)
+            try:
+                self._call("mouseDrag", x2, y2, step=step)
+            finally:
+                if self.client is not None:
+                    self._call("mouseUp", buttons[button])
+            return {"dragged": button, "from": [x1, y1], "to": [x2, y2]}
+
+    def scroll(self, x: int, y: int, direction: str, amount: int = 1) -> dict[str, Any]:
+        buttons = {"up": 4, "down": 5, "left": 6, "right": 7}
+        if direction not in buttons:
+            raise ValueError("direction must be up, down, left, or right")
+        if not 1 <= amount <= 20:
+            raise ValueError("amount must be between 1 and 20")
+        with self._lock:
+            self._check_point(x, y)
+            self._call("mouseMove", x, y)
+            for _ in range(amount):
+                self._call("mousePress", buttons[direction])
+            return {"scrolled": direction, "amount": amount, "x": x, "y": y}
+
+    def keypress(self, key: str) -> dict[str, Any]:
+        if not key.strip():
+            raise ValueError("key must not be empty")
+        with self._lock:
+            self._call("keyPress", self._normalize_key(key))
+            return {"pressed": key}
+
+    def key_down(self, key: str) -> dict[str, Any]:
+        if not key.strip():
+            raise ValueError("key must not be empty")
+        with self._lock:
+            normalized = self._normalize_key(key)
+            self._call("keyDown", normalized)
+            self._held_keys.add(normalized)
+            return {"key_down": key}
+
+    def key_up(self, key: str) -> dict[str, Any]:
+        if not key.strip():
+            raise ValueError("key must not be empty")
+        with self._lock:
+            normalized = self._normalize_key(key)
+            self._call("keyUp", normalized)
+            self._held_keys.discard(normalized)
+            return {"key_up": key}
+
+    @staticmethod
+    def _normalize_key(key: str) -> str:
+        parts = key.strip().replace("+", "-").split("-")
+        aliases = {
+            "backspace": "bsp", "escape": "esc", "return": "enter",
+            "insert": "ins", "pageup": "pgup", "pagedown": "pgdn",
+            "windows": "super", "win": "super",
+        }
+        parts = [aliases.get(part.lower(), part) for part in parts]
+        if len(parts) > 1:
+            return "-".join(part.lower() for part in parts)
+        if len(parts[0]) == 1:
+            return parts[0]
+        return parts[0].lower()
+
+    def mouse_down(self, x: int, y: int, button: str = "left") -> dict[str, Any]:
+        buttons = {"left": 1, "middle": 2, "right": 3}
+        if button not in buttons:
+            raise ValueError("button must be left, middle, or right")
+        with self._lock:
+            self._check_point(x, y)
+            self._call("mouseMove", x, y)
+            self._call("mouseDown", buttons[button])
+            self._held_buttons.add(button)
+            return {"mouse_down": button, "x": x, "y": y}
+
+    def mouse_up(self, x: int, y: int, button: str = "left") -> dict[str, Any]:
+        buttons = {"left": 1, "middle": 2, "right": 3}
+        if button not in buttons:
+            raise ValueError("button must be left, middle, or right")
+        with self._lock:
+            self._check_point(x, y)
+            self._call("mouseMove", x, y)
+            self._call("mouseUp", buttons[button])
+            self._held_buttons.discard(button)
+            return {"mouse_up": button, "x": x, "y": y}
+
+    def type_text(self, text: str, delay_ms: int = 0) -> dict[str, Any]:
+        if len(text) > 100_000:
+            raise ValueError("text is limited to 100,000 characters per call")
+        if not 0 <= delay_ms <= 1000:
+            raise ValueError("delay_ms must be between 0 and 1000")
+        with self._lock:
+            self._require_client()
+            for char in text:
+                if char in "\r":
+                    continue
+                if char == "\n":
+                    self._call("keyPress", "enter")
+                elif char == "\t":
+                    self._call("keyPress", "tab")
+                elif ord(char) <= 0xFF:
+                    self._call("keyPress", "minus" if char == "-" else char)
+                else:
+                    # Unicode keysyms per X11 convention. App locale/IME support varies.
+                    self._call("unicode_key", ord(char))
+                if delay_ms:
+                    self._call("pause", delay_ms / 1000.0)
+            return {"typed_characters": len(text)}
+
+    def clipboard_set(self, text: str) -> dict[str, Any]:
+        if len(text) > 100_000:
+            raise ValueError("clipboard text is limited to 100,000 characters")
+        try:
+            text.encode("iso-8859-1")
+        except UnicodeEncodeError as exc:
+            raise ValueError("VNC clipboard text supports ISO-8859-1 characters only") from exc
+        with self._lock:
+            self._call("paste", text)
+            return {"clipboard_characters": len(text)}
+
+    def clipboard_get(self) -> dict[str, Any]:
+        with self._lock:
+            client = self._require_client()
+            return {"text": client.factory.latest_clipboard}
+
+    def wait(self, seconds: float) -> dict[str, Any]:
+        if not 0 <= seconds <= 60:
+            raise ValueError("seconds must be between 0 and 60")
+        with self._lock:
+            self._require_client()
+            time.sleep(seconds)
+        return {"waited_seconds": seconds}

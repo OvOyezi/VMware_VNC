@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vnc-mcp"
+version = "0.1.0"
+description = "Self-contained VNC desktop control MCP server and CLI"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Shinko" }]
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+dependencies = [
+  "vncdotool==1.4.2",
+  "mcp==1.30.0",
+]
+
+[project.scripts]
+vnc-mcp = "vnc_mcp.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

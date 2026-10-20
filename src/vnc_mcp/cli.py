@@ -1,0 +1,151 @@
+"""CLI entry point for the packaged VNC MCP server and direct controls."""
+
+from __future__ import annotations
+
+import argparse
+import getpass
+import json
+import os
+from pathlib import Path
+import sys
+
+from .client import VNCSession
+
+
+def _connection_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--host", required=True, help="VNC host or IP address")
+    parser.add_argument("--port", type=int, required=True, help="explicit VNC port; VMware ports normally start at 5901")
+    parser.add_argument("--password-env", default="VNC_PASSWORD", help="environment variable holding VNC password")
+    parser.add_argument("--ask-password", action="store_true", help="explicitly prompt for a password; automation never prompts by default")
+    parser.add_argument("--timeout", type=float, default=15.0, help="operation timeout in seconds")
+    parser.add_argument("--screenshot-mode", choices=("refresh", "fresh"), default=os.environ.get("VNC_SCREENSHOT_MODE", "refresh"), help="use fresh for VMware servers with refresh timeouts")
+
+
+def _password(env_name: str, ask: bool = False) -> str | None:
+    value = os.environ.get(env_name)
+    if value:
+        return value
+    # Windows NUL can report isatty=True even with no interactive console.
+    # Password prompts must therefore be explicitly requested, not inferred.
+    if ask:
+        entered = getpass.getpass("VNC password (leave blank for none): ")
+        return entered or None
+    return None
+
+
+def _run_action(args: argparse.Namespace) -> int:
+    session = None
+    try:
+        session = VNCSession(args.timeout, screenshot_mode=args.screenshot_mode)
+        status = session.connect(args.host, args.port, _password(args.password_env, args.ask_password))
+        if args.command == "connect":
+            result: object = status
+        elif args.command == "screenshot":
+            image = session.capture(args.image_format, args.quality, tuple(args.region) if args.region else None)
+            target = Path(args.output or ("screenshot.jpg" if args.image_format == "jpeg" else "screenshot.png"))
+            target.write_bytes(image.data)
+            result = {"saved": str(target.resolve()), **image.metadata()}
+        elif args.command == "click":
+            result = session.click(args.x, args.y, args.button, args.count)
+        elif args.command == "move":
+            result = session.move(args.x, args.y)
+        elif args.command == "drag":
+            result = session.drag(args.x1, args.y1, args.x2, args.y2, args.button)
+        elif args.command == "scroll":
+            result = session.scroll(args.x, args.y, args.direction, args.amount)
+        elif args.command == "keypress":
+            result = session.keypress(args.key)
+        elif args.command == "type":
+            result = session.type_text(args.text, args.delay_ms)
+        elif args.command == "clipboard-get":
+            result = session.clipboard_get()
+        elif args.command == "clipboard-set":
+            result = session.clipboard_set(args.text)
+        elif args.command == "wait":
+            result = session.wait(args.seconds)
+        elif args.command == "status":
+            result = status
+        else:
+            raise ValueError(f"Unsupported command: {args.command}")
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    except Exception as exc:
+        print(f"vnc-mcp: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        # vncdotool's reactor runs in a daemon thread; disconnect only after
+        # pending VNC actions have drained, without hanging on an unopened client.
+        if session is not None and session.client is not None:
+            try:
+                session.disconnect()
+            except Exception:
+                pass
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="vnc-mcp", description="VNC desktop controls and MCP stdio server")
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("mcp", help="run the MCP stdio server")
+    for name in ("connect", "status"):
+        command = sub.add_parser(name, help=f"connect and show VNC {name} information")
+        _connection_options(command)
+    screenshot = sub.add_parser("screenshot", help="capture the desktop to a PNG")
+    _connection_options(screenshot)
+    screenshot.add_argument("--output")
+    screenshot.add_argument("--format", dest="image_format", choices=("png", "jpeg"), default="png")
+    screenshot.add_argument("--quality", type=int, default=80)
+    screenshot.add_argument("--region", nargs=4, type=int, metavar=("X", "Y", "WIDTH", "HEIGHT"))
+    click = sub.add_parser("click", help="click at screen coordinates")
+    _connection_options(click)
+    click.add_argument("x", type=int)
+    click.add_argument("y", type=int)
+    click.add_argument("--button", choices=("left", "middle", "right"), default="left")
+    click.add_argument("--count", type=int, default=1)
+    move = sub.add_parser("move", help="move pointer to screen coordinates")
+    _connection_options(move)
+    move.add_argument("x", type=int)
+    move.add_argument("y", type=int)
+    drag = sub.add_parser("drag", help="drag between screen coordinates")
+    _connection_options(drag)
+    drag.add_argument("x1", type=int)
+    drag.add_argument("y1", type=int)
+    drag.add_argument("x2", type=int)
+    drag.add_argument("y2", type=int)
+    drag.add_argument("--button", choices=("left", "middle", "right"), default="left")
+    scroll = sub.add_parser("scroll", help="scroll at screen coordinates")
+    _connection_options(scroll)
+    scroll.add_argument("x", type=int)
+    scroll.add_argument("y", type=int)
+    scroll.add_argument("direction", choices=("up", "down", "left", "right"))
+    scroll.add_argument("--amount", type=int, default=1)
+    keypress = sub.add_parser("keypress", help="press a key or chord such as ctrl-c or alt-tab")
+    _connection_options(keypress)
+    keypress.add_argument("key")
+    type_command = sub.add_parser("type", help="type text in the focused desktop control")
+    _connection_options(type_command)
+    type_command.add_argument("text")
+    type_command.add_argument("--delay-ms", type=int, default=0)
+    subcommands = (("clipboard-get", None), ("clipboard-set", "text"))
+    for name, value in subcommands:
+        command = sub.add_parser(name, help=f"remote clipboard {name.removeprefix('clipboard-')}")
+        _connection_options(command)
+        if value:
+            command.add_argument(value)
+    wait = sub.add_parser("wait", help="wait for the desktop to respond")
+    _connection_options(wait)
+    wait.add_argument("seconds", type=float, default=1.0, nargs="?")
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    if args.command == "mcp":
+        from .server import run as run_mcp
+        run_mcp()
+        return 0
+    return _run_action(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

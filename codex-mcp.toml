@@ -1,0 +1,9 @@
+# Shared VMware VNC project. Select each VM with host, port and session_id.
+[mcp_servers.vmware_vnc]
+command = 'C:\Users\Administrator\Documents\VMware_VNC\.venv\Scripts\python.exe'
+args = ['C:\Users\Administrator\Documents\VMware_VNC\main.py', 'mcp']
+cwd = 'C:\Users\Administrator\Documents\VMware_VNC'
+
+[mcp_servers.vmware_vnc.env]
+VNC_TIMEOUT = '5'
+VNC_SCREENSHOT_MODE = 'fresh'

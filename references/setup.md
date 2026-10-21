@@ -48,6 +48,8 @@ pwsh -NoProfile -File "$skillRoot/scripts/Get-McpConfig.ps1"
 
 认证需要时，在启动 MCP 的本机环境中提供对应变量，或使用宿主支持的环境变量转发。变量值不能提交 Git。密码变化后须确认服务进程实际获得新环境；不要在聊天中回显凭据。
 
+客户端连接 `127.0.0.1` 不会限制 VNC 服务端的监听范围。使用前核对服务端认证和网络访问规则；本项目的 RFB TCP 连接不提供 TLS 加密，远程连接需要环境已有的加密通道。
+
 ## 安装分发
 
 本仓库根目录就是单个 skill。向 `$skill-installer` 提供 [OvOyezi/VMware_VNC](https://github.com/OvOyezi/VMware_VNC)，选择 `--repo OvOyezi/VMware_VNC --path . --name vmware-vnc`，再在实际安装目录运行 Setup。

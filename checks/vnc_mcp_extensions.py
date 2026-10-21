@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.util
 import io
 import json
 from pathlib import Path
@@ -23,6 +24,7 @@ _clipboard = None
 _guest = None
 _client = None
 _operations = None
+_linux_helper = None
 
 
 def _payload_of_wire_message(wire_message: bytes) -> bytes:
@@ -312,6 +314,93 @@ def _close_loopback(fixtures, sessions) -> list[str]:
 
 
 class ExtensionChecks(unittest.TestCase):
+    def test_linux_explicit_display_stays_on_x11_and_discovers_owned_authority(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            authority = runtime / ".mutter-Xwaylandauth.synthetic"
+            authority.write_bytes(b"synthetic authority")
+            uid = runtime.stat().st_uid
+            with mock.patch.dict(_linux_helper.os.environ, {"WAYLAND_DISPLAY": "other-session"}, clear=True), mock.patch.object(
+                _linux_helper.os, "getuid", return_value=uid, create=True
+            ), mock.patch.object(_linux_helper, "Path", return_value=runtime):
+                env = _linux_helper.session_environment({"display": ":0"})
+            self.assertEqual(env["DISPLAY"], ":0")
+            self.assertNotIn("WAYLAND_DISPLAY", env)
+            self.assertEqual(env["XAUTHORITY"], str(authority))
+            with mock.patch.object(_linux_helper.shutil, "which", side_effect=lambda name: name):
+                self.assertEqual(_linux_helper.clipboard_commands(env)[2], "xclip")
+
+    def test_linux_ambiguous_authorities_fail_before_clipboard_access(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            for name in ("one", "two"):
+                (runtime / (".mutter-Xwaylandauth." + name)).write_bytes(b"synthetic authority")
+            with mock.patch.dict(_linux_helper.os.environ, {}, clear=True), mock.patch.object(
+                _linux_helper.os, "getuid", return_value=runtime.stat().st_uid, create=True
+            ), mock.patch.object(_linux_helper, "Path", return_value=runtime), mock.patch.object(
+                _linux_helper.subprocess, "run"
+            ) as run:
+                result = _linux_helper.prepare_clipboard({"token": "synthetic", "text": "test", "display": ":0"})
+            self.assertFalse(result["success"])
+            self.assertEqual(result["phase"], "environment")
+            run.assert_not_called()
+
+    def test_linux_explicit_authority_is_not_replaced(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            for name in ("one", "two"):
+                (runtime / (".mutter-Xwaylandauth." + name)).write_bytes(b"synthetic authority")
+            with mock.patch.dict(_linux_helper.os.environ, {}, clear=True), mock.patch.object(
+                _linux_helper.os, "getuid", return_value=runtime.stat().st_uid, create=True
+            ), mock.patch.object(_linux_helper, "Path", return_value=runtime):
+                env = _linux_helper.session_environment({"display": ":0", "xauthority": "/explicit/authority"})
+            self.assertEqual(env["XAUTHORITY"], "/explicit/authority")
+
+    def test_linux_authority_rejects_foreign_owners_and_nonregular_files(self):
+        regular = SimpleNamespace(lstat=lambda: SimpleNamespace(st_uid=10, st_mode=0o100600))
+        symlink = SimpleNamespace(lstat=lambda: SimpleNamespace(st_uid=11, st_mode=0o120777))
+        runtime = SimpleNamespace(glob=lambda pattern: [regular, symlink])
+        self.assertIsNone(_linux_helper.owned_xauthority(runtime, 11))
+
+    def test_linux_clipboard_failure_reports_phase_without_exception_message(self):
+        with mock.patch.object(_linux_helper, "session_environment", return_value={}), mock.patch.object(
+            _linux_helper, "clipboard_commands", return_value=(["synthetic-write"], ["synthetic-read"], "wayland")
+        ), mock.patch.object(_linux_helper.subprocess, "run", side_effect=[
+            SimpleNamespace(returncode=0),
+            _linux_helper.subprocess.TimeoutExpired(["synthetic-read", "SENSITIVE-ARGUMENT"], 5),
+        ]):
+            result = _linux_helper.prepare_clipboard({"token": "synthetic", "text": "test"})
+        self.assertFalse(result["success"])
+        self.assertEqual((result["backend"], result["phase"], result["error"]), ("wayland", "verify", "TimeoutExpired"))
+        self.assertNotIn("SENSITIVE-ARGUMENT", json.dumps(result))
+
+    def test_guest_failure_exposes_only_fixed_diagnostic_labels(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            vmrun = root / "vmrun.exe"
+            vmrun.write_bytes(b"synthetic executable")
+            _, profile_path = _write_profile_files(root, vmrun=str(vmrun))
+            profile = _guest.load_profiles(str(profile_path))["synthetic"]
+            credentials = {"VNC_TEST_GUEST_USER": "synthetic-user", "VNC_TEST_GUEST_PASSWORD": "SENSITIVE-PASSWORD"}
+            for backend, error, expected in (
+                ("wayland", "TimeoutExpired", "wayland/verify/TimeoutExpired"),
+                (["SENSITIVE-PASSWORD"], "SENSITIVE-PASSWORD", "verify"),
+            ):
+                payload = {}
+                def invoke(command, *arguments, control):
+                    if command == "copyFileFromHostToGuest" and arguments[0].endswith("payload.json"):
+                        payload.update(json.loads(Path(arguments[0]).read_text(encoding="utf-8")))
+                    elif command == "copyFileFromGuestToHost":
+                        Path(arguments[1]).write_text(json.dumps({"success": False, "token": payload["token"],
+                            "backend": backend, "phase": "verify", "error": error}), encoding="utf-8")
+                    return ""
+                with self.subTest(error=expected), mock.patch.dict(_guest.os.environ, credentials, clear=True):
+                    helper = _guest.VmrunClipboard(profile)
+                    with mock.patch.object(helper, "_invoke", side_effect=invoke), self.assertRaises(RuntimeError) as caught:
+                        helper.prepare_clipboard("test", _operations.ActionControl(time.monotonic() + 5))
+                    self.assertIn(expected, str(caught.exception))
+                    self.assertNotIn("SENSITIVE-PASSWORD", str(caught.exception))
+
     def test_unicode_emoji_and_crlf_roundtrip(self):
         text = "first\r\nsecond\rthird\nemoji 🙂"
         codec = _clipboard.ExtendedClipboard()
@@ -1097,11 +1186,14 @@ def _load_modules(source_root: Path) -> None:
     source = str(source_root / "src")
     if source not in sys.path:
         sys.path.insert(0, source)
-    global _clipboard, _guest, _client, _operations
+    global _clipboard, _guest, _client, _operations, _linux_helper
     _clipboard = importlib.import_module("vnc_mcp.clipboard")
     _guest = importlib.import_module("vnc_mcp.guest")
     _client = importlib.import_module("vnc_mcp.client")
     _operations = importlib.import_module("vnc_mcp.operations")
+    helper_spec = importlib.util.spec_from_file_location("linux_clipboard_helper", source_root / "src/vnc_mcp/resources/clipboard_linux.py")
+    _linux_helper = importlib.util.module_from_spec(helper_spec)
+    helper_spec.loader.exec_module(_linux_helper)
 
 
 class EvidenceTextTestResult(unittest.TextTestResult):

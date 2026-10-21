@@ -195,7 +195,19 @@ class VmrunClipboard:
                     raise RuntimeError("guest clipboard acknowledgement exceeds the size limit")
                 ack = json.loads(result.read_text(encoding="utf-8-sig"))
                 if not ack.get("success") or ack.get("token") != token or ack.get("sha256") != expected_hash:
-                    raise RuntimeError("guest clipboard could not be verified; no paste was sent")
+                    # Only fixed diagnostic labels may cross the guest boundary.
+                    # Exception messages, paths and command lines can contain secrets.
+                    labels = []
+                    for field, allowed in (
+                        ("backend", {"wayland", "xclip", "xsel"}),
+                        ("phase", {"environment", "write", "verify"}),
+                        ("error", {"RuntimeError", "TimeoutExpired", "CalledProcessError", "FileNotFoundError", "PermissionError", "OSError"}),
+                    ):
+                        value = ack.get(field)
+                        if isinstance(value, str) and value in allowed:
+                            labels.append(value)
+                    detail = " (" + "/".join(labels) + ")" if labels else ""
+                    raise RuntimeError("guest clipboard could not be verified" + detail + "; no paste was sent")
         finally:
             # A cancelled action may have prepared the clipboard, but never pastes.
             cleanup = ActionControl(time.monotonic() + 3.0)
@@ -206,5 +218,9 @@ class VmrunClipboard:
                     cleanup_errors.append(remote)
         if cleanup_errors:
             raise RuntimeError("guest clipboard prepared but temporary file cleanup failed; no paste was sent")
-        return {"clipboard_verified": True, "clipboard_sha256": expected_hash, "guest_profile": self.profile.name,
-                "guest_os": self.profile.guest_os, "temporary_files_removed": True}
+        result = {"clipboard_verified": True, "clipboard_sha256": expected_hash, "guest_profile": self.profile.name,
+                  "guest_os": self.profile.guest_os, "temporary_files_removed": True}
+        backend = ack.get("backend")
+        if isinstance(backend, str) and backend in {"wayland", "xclip", "xsel"}:
+            result["clipboard_backend"] = backend
+        return result

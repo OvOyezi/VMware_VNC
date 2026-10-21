@@ -47,6 +47,12 @@ vnc_screenshot(session_id="desktop-a", connection_id="<本次返回的 ID>")
 
 同一会话按顺序执行，默认至多 16 个未完成请求，包含异步等待。不同会话可独立工作。并行操作只用于已确认身份的不同桌面，不向同一桌面并发发送依赖前一步结果的输入。
 
+未连接的默认会话可通过 `vnc_status()` 查询，返回 `connected=false`，不占用连接槽位。未知具名会话仍需先显式连接。
+
+点击、拖动、滚轮及显式鼠标按下/松开会先定位指针并等待 150 毫秒，避免来宾在旧位置处理按钮事件。点击、`vnc_keypress` 和滚轮脉冲保持按下 80 毫秒，连续点击或滚轮脉冲间隔 40 毫秒。等待计入动作预算；取消或超时会清理保持的输入并断开连接，不重放动作。
+
+`vnc_keypress` 会拒绝与当前保持按键重叠的组合键，先用 `vnc_key_up` 释放后再操作。
+
 文字输入与来宾配置见 [text-input.md](text-input.md)。截图元数据另含 capture_seconds、transport_bytes、wire_encoding；前两者是本次客户端捕获耗时与该阶段接收的 RFB 字节数，fresh 包含短截图连接的握手，refresh 可能含同期通知。它们不代表应用响应时间或整个系统的带宽。
 
 VNC_ENCODING / CLI `--encoding` 可选 auto、hextile、raw。auto 优先无损 Hextile，并提供 RAW。服务端决定实际编码；VMware 内置 VNC 实机仍选 RAW。当前固定依赖的 ZRLE 解码有兼容性问题，未向服务端声明支持。

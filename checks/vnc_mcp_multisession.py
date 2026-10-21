@@ -131,10 +131,34 @@ async def isolation_checks(args, report, a, b, c, auth):
 
         alpha, beta = await asyncio.gather(connect(session, "alpha", a), connect(session, "beta", b))
         assert alpha["connection_id"] != beta["connection_id"]
-        assert (await call(session, "vnc_sessions"))["session_count"] == 2
+        initial_inventory = await call(session, "vnc_sessions")
+        assert initial_inventory["session_count"] == 2
         checks["two_desktops_connect_and_capture_concurrently"] = True
 
         event_counts = [len(item.events) for item in (a, b, c)]
+        empty_default = await call(session, "vnc_status")
+        assert empty_default["connected"] is False
+        assert empty_default["session_id"] == "default" and empty_default["connection_id"] is None
+        after_empty_status = await call(session, "vnc_sessions")
+        initial_ids = {
+            item["session_id"]: item["last_known_status"]["connection_id"]
+            for item in initial_inventory["sessions"]
+        }
+        after_status_ids = {
+            item["session_id"]: item["last_known_status"]["connection_id"]
+            for item in after_empty_status["sessions"]
+        }
+        assert after_empty_status["session_count"] == 2 and after_status_ids == initial_ids == {
+            "alpha": alpha["connection_id"], "beta": beta["connection_id"],
+        }
+        unknown_status = await session.call_tool("vnc_status", {"session_id": "missing"})
+        unknown_status_error = " ".join(getattr(item, "text", "") for item in unknown_status.content)
+        assert unknown_status.isError
+        assert "Unknown or expired VNC session" in unknown_status_error
+        assert "call vnc_connect explicitly" in unknown_status_error
+        assert [len(item.events) for item in (a, b, c)] == event_counts
+        checks["default_status_at_capacity_is_transient_and_named_status_stays_guarded"] = True
+
         invalid_calls = [
             session.call_tool("vnc_keypress", {"key": "x", "session_id": "alpha"}),
             session.call_tool("vnc_keypress", {"key": "x", "session_id": "missing", "connection_id": alpha["connection_id"]}),
@@ -148,6 +172,7 @@ async def isolation_checks(args, report, a, b, c, auth):
         accepted_before = c.accepted
         assert (await session.call_tool("vnc_connect", {"host": "127.0.0.1", "port": c.port, "session_id": "gamma"})).isError
         assert c.accepted == accepted_before and (await call(session, "vnc_sessions"))["session_count"] == 2
+        assert [len(item.events) for item in (a, b, c)] == event_counts
         checks["session_limit_rejects_before_opening_transport"] = True
 
         for invalid in ("", "with space", "../other", "x" * 65, "虚拟机"):
@@ -214,6 +239,32 @@ async def isolation_checks(args, report, a, b, c, auth):
         # Omitted session_id stays on the independent legacy default desktop.
         legacy = await call(session, "vnc_connect", host="127.0.0.1", port=c.port)
         await screenshot(session, legacy, c)
+        legacy_inventory = await call(session, "vnc_sessions")
+        assert legacy_inventory["session_count"] == 2
+        legacy_entries = {item["session_id"]: item for item in legacy_inventory["sessions"]}
+        assert legacy_entries["default"]["last_known_status"]["connection_id"] == legacy["connection_id"]
+        assert legacy_entries["beta"]["last_known_status"]["connection_id"] == beta["connection_id"]
+        auth_accepted_before = auth.accepted
+        assert (await session.call_tool("vnc_connect", {
+            "host": "127.0.0.1", "port": auth.port, "session_id": "gamma",
+        })).isError
+        assert auth.accepted == auth_accepted_before and (await call(session, "vnc_sessions"))["session_count"] == 2
+
+        typed_before = keys(c, ord("m"))
+        default_input = asyncio.create_task(session.call_tool("vnc_type", {
+            "text": "m" * 4, "delay_ms": 70,
+        }))
+        await until(lambda: keys(c, ord("m")) > typed_before)
+        queued_default_status = asyncio.create_task(session.call_tool("vnc_status", {}))
+        await asyncio.sleep(0.03)
+        assert not queued_default_status.done()
+        payload(await default_input)
+        existing_default_status = payload(await queued_default_status)
+        assert existing_default_status["connected"] is True
+        assert existing_default_status["session_id"] == "default"
+        assert existing_default_status["connection_id"] == legacy["connection_id"]
+        checks["existing_default_status_keeps_dispatcher_serialization_and_capacity"] = True
+
         z_before = [keys(item, 122) for item in (a, b, c)]
         await call(session, "vnc_keypress", key="z")
         await until(lambda: keys(c, 122) == z_before[2] + 1)
@@ -388,6 +439,58 @@ async def registry_lifecycle_checks(args, report):
         bad.fail_close = False
         await registry.close()
     assert registry.inventory()["session_count"] == 0
+
+    class TransientStatusBackend:
+        action_timeout = 2
+
+        def __init__(self):
+            self.connection_id = None
+            self.status_started = threading.Event()
+            self.status_release = threading.Event()
+
+        def execute(self, method, args, control, expected, pin):
+            if method == "status":
+                self.status_started.set()
+                assert self.status_release.wait(2)
+                return {"connected": False, "connection_id": None}
+            if method == "connect":
+                self.connection_id = "persistent-default-connection"
+                return {"connected": True, "connection_id": self.connection_id}
+            raise AssertionError(f"unexpected synthetic backend method: {method}")
+
+        def disconnect(self):
+            self.connection_id = None
+            return {"connected": False, "connection_id": None}
+
+    transient_backends = []
+
+    def transient_factory():
+        backend = TransientStatusBackend()
+        transient_backends.append(backend)
+        return backend
+
+    registry = SessionRegistry(transient_factory, max_sessions=1, idle_timeout=0)
+    status_task = asyncio.create_task(registry.run("status", session_id="default", pin=False))
+    try:
+        await asyncio.sleep(0)
+        assert transient_backends
+        assert await asyncio.to_thread(transient_backends[0].status_started.wait, 1)
+        assert registry.inventory()["session_count"] == 0
+        connected = await registry.run("connect", session_id="default", pin=False)
+        assert connected.connection_id == "persistent-default-connection"
+        transient_backends[0].status_release.set()
+        empty_status = await status_task
+        assert empty_status.value["connected"] is False
+        assert empty_status.session_id == "default" and empty_status.connection_id is None
+        inventory = registry.inventory()
+        assert inventory["session_count"] == 1
+        assert registry._entries["default"].backend.connection_id == connected.connection_id
+        report["checks"]["transient_status_unwind_preserves_concurrent_default_entry"] = True
+    finally:
+        for backend in transient_backends:
+            backend.status_release.set()
+        await asyncio.gather(status_task, return_exceptions=True)
+        await registry.close()
 
 
 def main():

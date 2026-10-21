@@ -14,7 +14,7 @@
 - 等待区域变化、匹配参考图或持续稳定，返回条件结果及最后有效截图。
 - 提供连接诊断、超时、取消与空闲回收；失败或取消的输入不自动重放。
 
-当前版本为 `0.3.1`，采用 Apache-2.0 许可证。MCP 和本项目 CLI 暴露同一套 VNC 能力；操作方法见 [SKILL.md](SKILL.md)及 [接口参考](references/operations.md)。
+当前版本为 `0.3.2`，采用 Apache-2.0 许可证。MCP 和本项目 CLI 暴露同一套 VNC 能力；操作方法见 [SKILL.md](SKILL.md)及 [接口参考](references/operations.md)。
 
 ## 安装
 
@@ -59,7 +59,7 @@ vnc_disconnect(session_id="work", connection_id="<同一个 ID>")
 
 默认回归覆盖人工 RFB 协议、会话隔离、取消、文本和画面条件；GitHub Actions 在 Windows / Python 3.11、3.15 矩阵执行。测试分类与实机入口见 [checks/README.md](checks/README.md)。
 
-已有实机覆盖包括 VMware Windows 桌面和 Linux / TigerVNC X11 的部分文字通道。各项覆盖不能互相替代，也不能保证受保护画面可见。服务端可能返回比请求区域更大的画面，图像稳定也不等于应用任务完成。具体范围见 [兼容性](docs/COMPATIBILITY.md)。
+0.3.2 已在 VMware Windows 11、Windows 10、Ubuntu 26.10 和 Debian 13.6 完成 98 项实机验收，覆盖键鼠、文字精确读回和画面条件；四台并行的三分钟检查完成 731 次截图。Ubuntu 使用明确配置的 X11 / xclip 剪贴板桥接，另验证了原生 Wayland 应用粘贴。有限测试不能保证所有应用或受保护画面可用。服务端可能返回比请求区域更大的画面，图像稳定也不等于应用任务完成。具体范围见 [兼容性](docs/COMPATIBILITY.md)。
 
 ## 维护
 

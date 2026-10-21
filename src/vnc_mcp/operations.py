@@ -31,8 +31,24 @@ class ActionControl:
 
     def wait(self, seconds: float) -> None:
         self.check()
-        self.cancelled.wait(min(seconds, max(0, self.deadline - time.monotonic())))
-        self.check()
+        if seconds <= 0:
+            self.check()
+            return
+
+        target = time.monotonic() + seconds
+        while True:
+            self.check()
+            now = time.monotonic()
+            remaining = target - now
+            if remaining <= 0:
+                self.check()
+                return
+
+            budget_remaining = self.deadline - now
+            if budget_remaining <= 0:
+                self.check()
+            self.cancelled.wait(min(remaining, budget_remaining))
+            self.check()
 
 
 class SessionBackend(Protocol):

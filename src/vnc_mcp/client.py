@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from functools import partial
 import struct
@@ -200,7 +202,7 @@ class VNCSession:
         self.height: int | None = None
         self._lock = threading.RLock()
         self._held_keys: set[str] = set()
-        self._held_buttons: set[str] = set()
+        self._held_buttons: set[str | int] = set()
 
     def connect(self, host: str, port: int = 5900, password: str | None = None,
                 profile: GuestProfile | None = None) -> dict[str, Any]:
@@ -291,7 +293,8 @@ class VNCSession:
                 transport = getattr(protocol, "transport", None)
                 if transport is not None and transport.connected:
                     for method, value in [("keyUp", key) for key in keys] + [
-                        ("mouseUp", {"left": 1, "middle": 2, "right": 3}[button]) for button in buttons
+                        ("mouseUp", button if type(button) is int else
+                         {"left": 1, "middle": 2, "right": 3}[button]) for button in buttons
                     ]:
                         try:
                             getattr(protocol, method)(value)
@@ -355,6 +358,31 @@ class VNCSession:
         if self._control is not None:
             self._control.check()
         return result
+
+    @contextmanager
+    def _input_action(self) -> Iterator[ActionControl]:
+        if self._control is None:
+            control = ActionControl(time.monotonic() + self.action_timeout)
+            self._control = control
+            owns_control = True
+        else:
+            control = self._control
+            owns_control = False
+        try:
+            yield control
+        except BaseException:
+            try:
+                self.disconnect()
+            except BaseException:
+                pass
+            raise
+        finally:
+            if owns_control and self._control is control:
+                self._control = None
+
+    def _position_pointer(self, x: int, y: int, control: ActionControl) -> None:
+        self._call("mouseMove", x, y)
+        control.wait(0.15)
 
     def screenshot(self, image_format: str = "png", quality: int = 80) -> tuple[bytes, int, int]:
         image = self.capture(image_format, quality)
@@ -450,6 +478,21 @@ class VNCSession:
             if not (0 <= x < self.width and 0 <= y < self.height):
                 raise ValueError(f"coordinates must be within {self.width}x{self.height}")
 
+    @staticmethod
+    def _button_number(button: str | int) -> int:
+        if isinstance(button, int):
+            return button
+        return {"left": 1, "middle": 2, "right": 3}[button]
+
+    def _mouse_button_is_held(self, button: str | int) -> bool:
+        number = self._button_number(button)
+        return any(self._button_number(held) == number for held in self._held_buttons)
+
+    def _discard_mouse_button(self, button: str | int) -> None:
+        number = self._button_number(button)
+        matches = [held for held in self._held_buttons if self._button_number(held) == number]
+        self._held_buttons.difference_update(matches)
+
     def click(self, x: int, y: int, button: str = "left", count: int = 1) -> dict[str, Any]:
         buttons = {"left": 1, "middle": 2, "right": 3}
         if button not in buttons:
@@ -458,9 +501,14 @@ class VNCSession:
             raise ValueError("count must be between 1 and 3")
         with self._lock:
             self._check_point(x, y)
-            self._call("mouseMove", x, y)
-            for _ in range(count):
-                self._call("mousePress", buttons[button])
+            if self._mouse_button_is_held(button):
+                raise ValueError("cannot click a mouse button that is already held; release it first")
+            with self._input_action() as control:
+                self._position_pointer(x, y, control)
+                for index in range(count):
+                    self._pulse("mouseDown", buttons[button], "mouseUp", self._held_buttons, control)
+                    if index + 1 < count:
+                        control.wait(0.04)
             return {"clicked": button, "count": count, "x": x, "y": y}
 
     def move(self, x: int, y: int) -> dict[str, Any]:
@@ -476,15 +524,18 @@ class VNCSession:
         with self._lock:
             self._check_point(x1, y1)
             self._check_point(x2, y2)
-            self._call("mouseMove", x1, y1)
-            self._call("mouseDown", buttons[button])
+            if self._mouse_button_is_held(button):
+                raise ValueError("cannot drag with a mouse button that is already held; release it first")
             distance = max(abs(x2 - x1), abs(y2 - y1))
             step = max(1, (distance + 29) // 30)
-            try:
+            with self._input_action() as control:
+                self._position_pointer(x1, y1, control)
+                self._held_buttons.add(button)
+                self._call("mouseDown", buttons[button])
                 self._call("mouseDrag", x2, y2, step=step)
-            finally:
-                if self.client is not None:
-                    self._call("mouseUp", buttons[button])
+                control.wait(0.08)
+                self._call("mouseUp", buttons[button])
+                self._discard_mouse_button(button)
             return {"dragged": button, "from": [x1, y1], "to": [x2, y2]}
 
     def scroll(self, x: int, y: int, direction: str, amount: int = 1) -> dict[str, Any]:
@@ -495,25 +546,43 @@ class VNCSession:
             raise ValueError("amount must be between 1 and 20")
         with self._lock:
             self._check_point(x, y)
-            self._call("mouseMove", x, y)
-            for _ in range(amount):
-                self._call("mousePress", buttons[direction])
+            with self._input_action() as control:
+                self._position_pointer(x, y, control)
+                for index in range(amount):
+                    self._pulse("mouseDown", buttons[direction], "mouseUp", self._held_buttons, control)
+                    if index + 1 < amount:
+                        control.wait(0.04)
             return {"scrolled": direction, "amount": amount, "x": x, "y": y}
 
     def keypress(self, key: str) -> dict[str, Any]:
         if not key.strip():
             raise ValueError("key must not be empty")
         with self._lock:
-            self._call("keyPress", self._normalize_key(key))
+            normalized = self._normalize_key(key)
+            pressed_parts = set(normalized.split("-"))
+            held_parts = {part for held in self._held_keys for part in held.split("-")}
+            if pressed_parts & held_parts:
+                raise ValueError("cannot pulse a key or chord that overlaps an already held key; release held keys first")
+            with self._input_action() as control:
+                self._pulse("keyDown", normalized, "keyUp", self._held_keys, control)
             return {"pressed": key}
+
+    def _pulse(self, down_method: str, value: Any, up_method: str, held: set,
+               control: ActionControl) -> None:
+        held.add(value)
+        self._call(down_method, value)
+        control.wait(0.08)
+        self._call(up_method, value)
+        held.discard(value)
 
     def key_down(self, key: str) -> dict[str, Any]:
         if not key.strip():
             raise ValueError("key must not be empty")
         with self._lock:
             normalized = self._normalize_key(key)
-            self._call("keyDown", normalized)
-            self._held_keys.add(normalized)
+            with self._input_action():
+                self._held_keys.add(normalized)
+                self._call("keyDown", normalized)
             return {"key_down": key}
 
     def key_up(self, key: str) -> dict[str, Any]:
@@ -546,9 +615,12 @@ class VNCSession:
             raise ValueError("button must be left, middle, or right")
         with self._lock:
             self._check_point(x, y)
-            self._call("mouseMove", x, y)
-            self._call("mouseDown", buttons[button])
-            self._held_buttons.add(button)
+            if self._mouse_button_is_held(button):
+                raise ValueError("mouse button is already held; release it first")
+            with self._input_action() as control:
+                self._position_pointer(x, y, control)
+                self._held_buttons.add(button)
+                self._call("mouseDown", buttons[button])
             return {"mouse_down": button, "x": x, "y": y}
 
     def mouse_up(self, x: int, y: int, button: str = "left") -> dict[str, Any]:
@@ -557,9 +629,10 @@ class VNCSession:
             raise ValueError("button must be left, middle, or right")
         with self._lock:
             self._check_point(x, y)
-            self._call("mouseMove", x, y)
-            self._call("mouseUp", buttons[button])
-            self._held_buttons.discard(button)
+            with self._input_action() as control:
+                self._position_pointer(x, y, control)
+                self._call("mouseUp", buttons[button])
+                self._discard_mouse_button(button)
             return {"mouse_up": button, "x": x, "y": y}
 
     def type_text(self, text: str, delay_ms: int = 0) -> dict[str, Any]:

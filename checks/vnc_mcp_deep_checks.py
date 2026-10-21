@@ -28,6 +28,52 @@ def keys(fixture, code):
     return sum(event[0] == "key" and event[1] and event[2] == code for event in fixture.events)
 
 
+def pointer_events(events, start):
+    return [event for event in events[start:] if event[0] == "pointer"]
+
+
+def wheel_pulses(events, start):
+    masks = [event[1] for event in pointer_events(events, start)]
+    first_down = next((index for index, mask in enumerate(masks) if mask & 16), None)
+    return masks[first_down:] if first_down is not None else []
+
+
+class EarlyWakeEvent:
+    """Event substitute that sleeps, then spuriously reports an early wake."""
+
+    def __init__(self):
+        self.wait_calls = 0
+
+    def is_set(self):
+        return False
+
+    def wait(self, timeout=None):
+        self.wait_calls += 1
+        if timeout is not None and timeout > 0:
+            time.sleep(timeout / 2)
+        return False
+
+
+async def wait_for_events(fixture, predicate, timeout=1.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        events = tuple(fixture.events)
+        if predicate(events):
+            return events
+        await asyncio.sleep(0.005)
+    raise AssertionError("timed out waiting for synthetic RFB input events")
+
+
+def wait_for_events_sync(fixture, predicate, timeout=1.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        events = tuple(fixture.events)
+        if predicate(events):
+            return events
+        time.sleep(0.005)
+    raise AssertionError("timed out waiting for synthetic RFB input events")
+
+
 async def cancel(session, request_id, task):
     await session.send_notification(types.ClientNotification(types.CancelledNotification(
         params=types.CancelledNotificationParams(requestId=request_id, reason="synthetic cancellation check"),
@@ -62,7 +108,279 @@ async def mcp_checks(args, report, a, b, auth):
                     assert not (await session.call_tool("vnc_screenshot")).isError
                     return state
 
+                initial_connection = await connect(a)
+
+                click_start = len(a.events)
+                click_task = asyncio.create_task(session.call_tool(
+                    "vnc_click", {"x": 22, "y": 18, "button": "left", "count": 2}
+                ))
+                await wait_for_events(a, lambda events: any(
+                    event[1:] == (0, 22, 18) for event in pointer_events(events, click_start)
+                ))
+                click_move_seen = time.monotonic()
+                await asyncio.sleep(0.05)
+                assert [event[1] for event in pointer_events(tuple(a.events), click_start)] == [0]
+                assert not click_task.done()
+                await wait_for_events(a, lambda events: any(
+                    event[1] & 1 for event in pointer_events(events, click_start)
+                ))
+                click_first_down_seen = time.monotonic()
+                click_mid = pointer_events(tuple(a.events), click_start)
+                assert [event[1] for event in click_mid] == [0, 1]
+                assert click_first_down_seen - click_move_seen >= 0.12
+                await asyncio.sleep(0.04)
+                assert [event[1] for event in pointer_events(tuple(a.events), click_start)] == [0, 1]
+                assert not click_task.done()
+                click_first_up_events = await wait_for_events(a, lambda events: len(
+                    pointer_events(events, click_start)
+                ) >= 3)
+                click_first_up_seen = time.monotonic()
+                assert [event[1] for event in pointer_events(click_first_up_events, click_start)][:3] == [0, 1, 0]
+                assert click_first_up_seen - click_first_down_seen >= 0.06
+                await wait_for_events(a, lambda events: len(pointer_events(events, click_start)) >= 4)
+                click_second_down_seen = time.monotonic()
+                assert click_second_down_seen - click_first_up_seen >= 0.025
+                click_final_events = await wait_for_events(
+                    a, lambda events: len(pointer_events(events, click_start)) >= 5
+                )
+                click_second_up_seen = time.monotonic()
+                click_sequence = pointer_events(click_final_events, click_start)
+                assert [event[1] for event in click_sequence] == [0, 1, 0, 1, 0]
+                assert click_second_up_seen - click_second_down_seen >= 0.06
+                click_result = payload(await click_task)
+                assert click_result == {
+                    "clicked": "left", "count": 2, "x": 22, "y": 18,
+                    "session_id": initial_connection["session_id"],
+                    "connection_id": initial_connection["connection_id"],
+                }, click_result
+                metrics["click_position_settle_seconds"] = round(click_first_down_seen - click_move_seen, 4)
+                metrics["click_pulse_hold_seconds"] = [
+                    round(click_first_up_seen - click_first_down_seen, 4),
+                    round(click_second_up_seen - click_second_down_seen, 4),
+                ]
+                metrics["double_click_gap_seconds"] = round(click_second_down_seen - click_first_up_seen, 4)
+                checks["click_settles_pointer_and_doubleclicks_with_held_pulses"] = True
+
+                mouse_down_start = len(a.events)
+                mouse_down_task = asyncio.create_task(session.call_tool(
+                    "vnc_mouse_down", {"x": 11, "y": 14, "button": "right"}
+                ))
+                await wait_for_events(a, lambda events: any(
+                    event[1:] == (0, 11, 14) for event in pointer_events(events, mouse_down_start)
+                ))
+                mouse_move_seen = time.monotonic()
+                await asyncio.sleep(0.05)
+                assert not any(event[1] & 4 for event in pointer_events(tuple(a.events), mouse_down_start))
+                assert not mouse_down_task.done()
+                await wait_for_events(a, lambda events: any(
+                    event[1] & 4 for event in pointer_events(events, mouse_down_start)
+                ))
+                mouse_down_seen = time.monotonic()
+                assert mouse_down_seen - mouse_move_seen >= 0.12
+                payload(await mouse_down_task)
+                before_duplicate_click = len(a.events)
+                assert (await session.call_tool("vnc_click", {
+                    "x": 11, "y": 14, "button": "right"
+                })).isError
+                assert (await call("vnc_status"))["connected"]
+                assert len(a.events) == before_duplicate_click
+                await call("vnc_mouse_up", x=11, y=14, button="right")
+
+                def right_button_released(events):
+                    pointers = pointer_events(events, mouse_down_start)
+                    down_index = next((index for index, event in enumerate(pointers) if event[1] & 4), None)
+                    return down_index is not None and any(
+                        not (event[1] & 4) for event in pointers[down_index + 1:]
+                    )
+
+                mouse_up_events = await wait_for_events(a, right_button_released)
+                assert mouse_up_events and (await call("vnc_status"))["connected"]
+                metrics["mouse_down_position_settle_seconds"] = round(mouse_down_seen - mouse_move_seen, 4)
+                checks["explicit_mouse_down_settles_and_keeps_held_button"] = True
+
+                f10_start = len(a.events)
+                f10_press = asyncio.create_task(session.call_tool("vnc_keypress", {"key": "f10"}))
+                f10_down_seen = time.monotonic()
+                await wait_for_events(
+                    a, lambda events: any(
+                        event[0] == "key" and event[1] and event[2] == 0xFFC7
+                        for event in events[f10_start:]
+                    )
+                )
+                await asyncio.sleep(0.04)
+                f10_mid_events = tuple(a.events[f10_start:])
+                assert sum(event[0] == "key" and event[1] and event[2] == 0xFFC7 for event in f10_mid_events) == 1
+                assert not any(event[0] == "key" and not event[1] and event[2] == 0xFFC7 for event in f10_mid_events)
+                assert not f10_press.done()
+                f10_up_events = await wait_for_events(
+                    a, lambda events: any(
+                        event[0] == "key" and not event[1] and event[2] == 0xFFC7
+                        for event in events[f10_start:]
+                    )
+                )
+                f10_up_seen = time.monotonic()
+                f10_sequence = [event for event in f10_up_events[f10_start:]
+                                if event[0] == "key" and event[2] == 0xFFC7]
+                assert [event[1] for event in f10_sequence] == [True, False]
+                assert f10_up_seen - f10_down_seen >= 0.06
+                payload(await f10_press)
+                metrics["keypress_hold_seconds"] = round(f10_up_seen - f10_down_seen, 4)
+                checks["keypress_uses_held_down_up_pulse"] = True
+
+                wheel_start = len(a.events)
+                wheel_scroll = asyncio.create_task(session.call_tool(
+                    "vnc_scroll", {"x": 20, "y": 20, "direction": "down", "amount": 2}
+                ))
+                await wait_for_events(a, lambda events: any(
+                    event[1:] == (0, 20, 20) for event in pointer_events(events, wheel_start)
+                ))
+                wheel_move_seen = time.monotonic()
+                await wait_for_events(a, lambda events: bool(wheel_pulses(events, wheel_start)))
+                wheel_first_down_seen = time.monotonic()
+                assert wheel_first_down_seen - wheel_move_seen >= 0.12
+                await asyncio.sleep(0.04)
+                wheel_mid = tuple(a.events[wheel_start:])
+                assert wheel_pulses(wheel_mid, 0) == [16]
+                assert not wheel_scroll.done()
+
+                await wait_for_events(
+                    a, lambda events: len(wheel_pulses(events, wheel_start)) >= 2
+                )
+                wheel_first_up_seen = time.monotonic()
+                assert wheel_first_up_seen - wheel_first_down_seen >= 0.06
+                await asyncio.sleep(0.02)
+                assert sum(mask & 16 != 0 for mask in wheel_pulses(tuple(a.events), wheel_start)) == 1
+                await wait_for_events(
+                    a, lambda events: len(wheel_pulses(events, wheel_start)) >= 3
+                )
+                wheel_second_down_seen = time.monotonic()
+                assert wheel_second_down_seen - wheel_first_up_seen >= 0.025
+                wheel_final_events = await wait_for_events(
+                    a, lambda events: len(wheel_pulses(events, wheel_start)) >= 4
+                )
+                wheel_second_up_seen = time.monotonic()
+                assert wheel_pulses(wheel_final_events, wheel_start)[:4] == [16, 0, 16, 0]
+                assert wheel_second_up_seen - wheel_second_down_seen >= 0.06
+                payload(await wheel_scroll)
+                metrics["wheel_pulse_hold_seconds"] = [
+                    round(wheel_first_up_seen - wheel_first_down_seen, 4),
+                    round(wheel_second_up_seen - wheel_second_down_seen, 4),
+                ]
+                metrics["wheel_position_settle_seconds"] = round(wheel_first_down_seen - wheel_move_seen, 4)
+                metrics["wheel_inter_pulse_gap_seconds"] = round(wheel_second_down_seen - wheel_first_up_seen, 4)
+                checks["scroll_repeats_ordered_held_wheel_pulses"] = True
+
+                paste_start = len(a.events)
+                paste_task = asyncio.create_task(session.call_tool(
+                    "vnc_type", {"text": "paste-pulse", "method": "clipboard", "paste_key": "ctrl-v"}
+                ))
+
+                def paste_key_counts(events, down):
+                    return {
+                        code: sum(event[0] == "key" and event[1] is down and event[2] == code
+                                  for event in events[paste_start:])
+                        for code in (0xFFE3, ord("v"))
+                    }
+
+                await wait_for_events(
+                    a, lambda events: all(count == 1 for count in paste_key_counts(events, True).values())
+                )
+                await asyncio.sleep(0.04)
+                paste_mid = tuple(a.events[paste_start:])
+                assert not any(event[0] == "key" and not event[1] and event[2] in {0xFFE3, ord("v")}
+                               for event in paste_mid)
+                assert not paste_task.done()
+                paste_result = payload(await paste_task)
+                paste_up_events = await wait_for_events(
+                    a, lambda events: all(count == 1 for count in paste_key_counts(events, False).values())
+                )
+                paste_sequence = [event for event in paste_up_events[paste_start:]
+                                  if event[0] == "key" and event[2] in {0xFFE3, ord("v")}]
+                assert sum(event[1] for event in paste_sequence) == 2
+                assert sum(not event[1] for event in paste_sequence) == 2
+                assert paste_result["paste_sent"] is True
+                checks["send_text_paste_shortcut_uses_held_key_pulse"] = True
+
+                held_start = len(a.events)
+                await call("vnc_key_down", key="shift")
+                assert any(event[0] == "key" and event[1] and event[2] == 0xFFE1
+                           for event in a.events[held_start:])
+                assert (await session.call_tool("vnc_keypress", {"key": "shift"})).isError
+                assert (await call("vnc_status"))["connected"]
+                assert not any(event[0] == "key" and not event[1] and event[2] == 0xFFE1
+                               for event in a.events[held_start:])
+                await call("vnc_key_up", key="shift")
+                assert any(event[0] == "key" and not event[1] and event[2] == 0xFFE1
+                           for event in a.events[held_start:])
+                checks["keypress_preserves_overlapping_tracked_key"] = True
+
+                cancel_start = len(a.events)
+                request_id = session._request_id
+                cancelled_pulse = asyncio.create_task(session.call_tool("vnc_keypress", {"key": "f9"}))
+                await wait_for_events(
+                    a, lambda events: any(
+                        event[0] == "key" and event[1] and event[2] == 0xFFC6
+                        for event in events[cancel_start:]
+                    )
+                )
+                await cancel(session, request_id, cancelled_pulse)
+                assert not (await call("vnc_status"))["connected"]
+                cancelled_events = await wait_for_events(
+                    a, lambda events: any(
+                        event[0] == "key" and not event[1] and event[2] == 0xFFC6
+                        for event in events[cancel_start:]
+                    )
+                )
+                cancelled_sequence = [event for event in cancelled_events[cancel_start:]
+                                      if event[0] == "key" and event[2] == 0xFFC6]
+                assert [event[1] for event in cancelled_sequence] == [True, False]
                 await connect(a)
+                checks["cancelled_key_pulse_releases_and_clears_connection"] = True
+
+                wheel_cancel_start = len(a.events)
+                wheel_request_id = session._request_id
+                cancelled_wheel = asyncio.create_task(session.call_tool(
+                    "vnc_scroll", {"x": 20, "y": 20, "direction": "down", "amount": 5}
+                ))
+                await wait_for_events(
+                    a, lambda events: bool(wheel_pulses(events, wheel_cancel_start))
+                )
+                await cancel(session, wheel_request_id, cancelled_wheel)
+                assert not (await call("vnc_status"))["connected"]
+                cancelled_wheel_events = await wait_for_events(
+                    a, lambda events: len(wheel_pulses(events, wheel_cancel_start)) >= 2
+                )
+                assert wheel_pulses(cancelled_wheel_events, wheel_cancel_start) == [16, 0]
+                await connect(a)
+                checks["cancelled_wheel_pulse_releases_and_clears_connection"] = True
+
+                drag_cancel_start = len(a.events)
+                drag_request_id = session._request_id
+                cancelled_drag = asyncio.create_task(session.call_tool("vnc_drag", {
+                    "x1": 8, "y1": 9, "x2": 48, "y2": 36, "button": "left"
+                }))
+                await wait_for_events(a, lambda events: any(
+                    event[1] & 1 and event[2:] == (8, 9)
+                    for event in pointer_events(events, drag_cancel_start)
+                ))
+                await cancel(session, drag_request_id, cancelled_drag)
+                assert not (await call("vnc_status"))["connected"]
+
+                def drag_released(events):
+                    pointers = pointer_events(events, drag_cancel_start)
+                    down_index = next((index for index, event in enumerate(pointers) if event[1] & 1), None)
+                    return down_index is not None and any(
+                        not (event[1] & 1) for event in pointers[down_index + 1:]
+                    )
+
+                released_drag_events = await wait_for_events(a, drag_released)
+                drag_pointers = pointer_events(released_drag_events, drag_cancel_start)
+                drag_down_index = next(index for index, event in enumerate(drag_pointers) if event[1] & 1)
+                assert drag_pointers[drag_down_index][2:] == (8, 9)
+                assert drag_released(released_drag_events)
+                await connect(a)
+                checks["cancelled_drag_releases_button_and_clears_connection"] = True
+
                 waiter = asyncio.create_task(session.call_tool("vnc_wait", {"seconds": 1.0}))
                 await asyncio.sleep(0.05)
                 started = time.monotonic()
@@ -169,7 +487,7 @@ async def mcp_checks(args, report, a, b, auth):
 def backend_checks(args, report, a, b):
     sys.path.insert(0, str(args.source / "src"))
     from vnc_mcp.client import VNCSession
-    from vnc_mcp.operations import ActionControl, ActionTimedOut
+    from vnc_mcp.operations import ActionCancelled, ActionControl, ActionTimedOut
     from vnc_mcp.cli import build_parser, _password
     checks, metrics = report["checks"], report["metrics"]
     for value in (-1, 0, float("inf"), float("nan")):
@@ -193,9 +511,110 @@ def backend_checks(args, report, a, b):
         assert _password("VNC_PASSWORD") is None
     assert "vnc_mcp.server" not in sys.modules
     checks["cli_noninteractive_password_and_lazy_server_import"] = True
+
+    requested_wait = 0.08
+    early_wake = EarlyWakeEvent()
+    control = ActionControl(time.monotonic() + 1.0)
+    control.cancelled = early_wake
+    wait_started = time.monotonic()
+    control.wait(requested_wait)
+    wait_elapsed = time.monotonic() - wait_started
+    assert wait_elapsed >= requested_wait - 0.005
+    assert early_wake.wait_calls > 1
+    metrics["early_wake_wait_elapsed_seconds"] = round(wait_elapsed, 4)
+    checks["action_control_wait_survives_early_wakes"] = True
+
+    early_wake = EarlyWakeEvent()
+    control = ActionControl(time.monotonic() + 0.025)
+    control.cancelled = early_wake
+    try:
+        control.wait(requested_wait)
+        raise AssertionError("short action budget returned successfully after early wakes")
+    except ActionTimedOut:
+        pass
+    assert early_wake.wait_calls > 1
+    checks["action_control_early_wakes_still_enforce_deadline"] = True
+
     one, two = VNCSession(.5, "fresh"), VNCSession(.5, "fresh")
     one.connect("127.0.0.1", a.port)
     two.connect("127.0.0.1", b.port)
+
+    key_down_start = len(a.events)
+    key_down_code = 0xFFC9  # F12
+    control = ActionControl(time.monotonic() + 5.0)
+    original_check = control.check
+    check_calls = 0
+
+    def cancel_after_wire_key_down():
+        nonlocal check_calls
+        check_calls += 1
+        if check_calls == 3:
+            wait_for_events_sync(a, lambda events: any(
+                event[0] == "key" and event[1] and event[2] == key_down_code
+                for event in events[key_down_start:]
+            ))
+            control.cancelled.set()
+        original_check()
+
+    control.check = cancel_after_wire_key_down
+    key_down_errors = []
+
+    def issue_held_key():
+        try:
+            one.execute("key_down", ("f12",), control, one.connection_id, True)
+        except BaseException as exc:
+            key_down_errors.append(exc)
+
+    key_down_worker = threading.Thread(target=issue_held_key, name="cancelled-explicit-key-down")
+    key_down_worker.start()
+    try:
+        key_down_events = wait_for_events_sync(a, lambda events: [
+            event[1] for event in events[key_down_start:]
+            if event[0] == "key" and event[2] == key_down_code
+        ] == [True, False])
+        key_down_worker.join(2)
+        assert not key_down_worker.is_alive()
+        key_down_sequence = [event[1] for event in key_down_events[key_down_start:]
+                             if event[0] == "key" and event[2] == key_down_code]
+        assert key_down_sequence == [True, False]
+        assert len(key_down_errors) == 1 and isinstance(key_down_errors[0], ActionCancelled)
+        assert not one.status()["connected"]
+        checks["cancelled_explicit_key_down_releases_and_clears_connection"] = True
+    finally:
+        control.cancelled.set()
+        key_down_worker.join(2)
+        if one.status()["connected"]:
+            one.disconnect()
+
+    one.connect("127.0.0.1", a.port)
+    key_start = len(a.events)
+    try:
+        one.execute("keypress", ("f10",), ActionControl(time.monotonic() + 0.045), one.connection_id, True)
+        raise AssertionError("short key pulse budget was not enforced")
+    except ActionTimedOut:
+        pass
+    wait_for_events_sync(
+        a, lambda events: [event[1] for event in events[key_start:]
+                           if event[0] == "key" and event[2] == 0xFFC7] == [True, False]
+    )
+    assert not one.status()["connected"]
+    checks["short_key_pulse_budget_releases_and_disconnects"] = True
+
+    one.connect("127.0.0.1", a.port)
+    wheel_start = len(a.events)
+    try:
+        one.execute("scroll", (20, 20, "down", 2), ActionControl(time.monotonic() + 0.21),
+                    one.connection_id, True)
+        raise AssertionError("short wheel pulse budget was not enforced")
+    except ActionTimedOut:
+        pass
+    wait_for_events_sync(
+        a, lambda events: wheel_pulses(events, wheel_start) == [16, 0]
+    )
+    assert not one.status()["connected"]
+    checks["short_wheel_pulse_budget_releases_and_disconnects"] = True
+
+    one.connect("127.0.0.1", a.port)
     save = Image.Image.save
     threads = []
     started, release = threading.Event(), threading.Event()

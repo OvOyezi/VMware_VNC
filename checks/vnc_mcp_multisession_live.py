@@ -44,6 +44,8 @@ async def run(args, report):
                 async def call(name, **arguments):
                     return payload(await session.call_tool(name, arguments))
 
+                report["runtime_version"] = (await call("vnc_diagnostics"))["application"]["version"]
+
                 async def screenshot(label, index, region=None):
                     state = states[label]
                     arguments = {"session_id": label, "connection_id": state["connection_id"]}

@@ -37,6 +37,10 @@ focus 坐标来自已检查的截图。普通文本控件默认 ctrl-v；终端�
 - username_env、password_env、可选 vm_password_env 只填写环境变量名；真实值由启动 MCP/CLI 的本机环境提供。vmrun 可由 profile 的 vmrun 或 VNC_VMRUN_PATH 显式指定，否则查找官方安装位置。
 - Linux 需要来宾 Python 3，并已有 xclip/xsel，或 wl-copy 与 wl-paste。X11 配置实际 display 和必要的 xauthority；Wayland 只使用当前账号拥有的运行时目录，发现多个 socket 时不猜测目标。临时目录应为该账号私有可写目录。
 
+GNOME 的 Xwayland 认证文件可能随登录变化。显式指定 `display` 且没有 `xauthority` 时，辅助程序仅从当前账号拥有的 `/run/user/<uid>/` 中选择唯一、同属该账号的 `.mutter-Xwaylandauth.*` 普通文件；多个候选会报错。明确提供的 `xauthority` 优先。
+
+Wayland 通道是否可用还取决于桌面会话。若 `wl-copy` / `wl-paste` 超时，先检查当前状态；可以明确配置 Xwayland 的 `display` 并安装 xclip/xsel，再单独验收应用粘贴。失败后不会自动换通道或重发文字。
+
 服务启动时设置 VNC_PROFILES_FILE 指向本机配置。`vnc_profiles()` 只返回端点与通道信息。显式选择后连接：
 
 ```python
@@ -55,6 +59,8 @@ vnc_text(text="中文输入验证", focus_x=500, focus_y=300,
 每次至多 100,000 字符，拒绝 NUL 和无效 Unicode surrogate；协议消息及解压内容各有 1 MiB 上限。Windows 辅助输入将换行规范为 CRLF；协议读回以 LF 表示。
 
 结果中的 submitted_characters / 兼容字段 typed_characters 是提交数量。clipboard_verified 只证明来宾剪贴板校验成功，paste_sent 只证明已发粘贴事件；application_verified 固定为 false。用新截图或应用自己的读回结果确认实际文本。
+
+Linux 成功结果可包含 `clipboard_backend`（wayland、xclip 或 xsel）。准备失败时只报告固定的阶段、后端和错误类型，不回显辅助命令、文字或凭据。
 
 准备、认证、清理、超时或取消失败时，不自动重放输入。剪贴板可能已经变化，输入也可能已部分送达；先核对当前状态，再决定下一步。未配置可靠 Unicode 通道时，不尝试盲切中文输入法。
 

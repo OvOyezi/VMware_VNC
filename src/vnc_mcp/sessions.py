@@ -75,7 +75,7 @@ class SessionRegistry:
             raise ValueError("Named sessions require the connection_id returned by vnc_connect; pass both session_id and connection_id")
 
     @asynccontextmanager
-    async def _lease(self, session_id: str, create: bool = False):
+    async def _lease(self, session_id: str, create: bool = False, status_query: bool = False):
         self._validate_name(session_id)
         if self._closing:
             raise ConnectionError("VNC server is shutting down")
@@ -83,11 +83,13 @@ class SessionRegistry:
         if entry is None:
             if not create and session_id != DEFAULT_SESSION:
                 raise ConnectionError(f"Unknown or expired VNC session {session_id!r}; call vnc_connect explicitly")
-            if len(self._entries) >= self.max_sessions:
+            transient_status = status_query and not create and session_id == DEFAULT_SESSION
+            if not transient_status and len(self._entries) >= self.max_sessions:
                 raise RuntimeError("VNC session limit reached; disconnect an existing session or wait for idle expiry")
             backend = self.factory()
             entry = _Entry(backend, OperationDispatcher(backend, self.max_pending))
-            self._entries[session_id] = entry
+            if not transient_status:
+                self._entries[session_id] = entry
         if entry.retiring:
             raise ConnectionError("VNC session is closing; reconnect explicitly after cleanup finishes")
         if entry.users >= self.max_pending:
@@ -100,6 +102,8 @@ class SessionRegistry:
             entry.last_used = time.monotonic()
             # Failed connects and explicit disconnects release capacity immediately.
             # A queued call or async wait retains its original entry until it exits.
+            # Identity protects a persistent default entry created while a
+            # transient status lease for that same ID is still unwinding.
             if not entry.users and entry.backend.connection_id is None and not entry.retiring:
                 if self._entries.get(session_id) is entry:
                     del self._entries[session_id]
@@ -114,7 +118,8 @@ class SessionRegistry:
                   connection_id: str | None = None, pin: bool = True) -> SessionResult:
         if pin:
             self._require_guard(session_id, connection_id)
-        async with self._lease(session_id, create=method == "connect") as entry:
+        async with self._lease(session_id, create=method == "connect",
+                               status_query=method == "status") as entry:
             value = await entry.dispatcher.run(method, *args, connection_id=connection_id, pin=pin)
             self._remember(entry, value)
             return SessionResult(value, session_id, entry.backend.connection_id)

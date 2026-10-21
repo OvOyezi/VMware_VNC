@@ -16,16 +16,18 @@
 
 ## 已有实机覆盖
 
-下列范围来自 0.2.0 / 0.3.0 的验收，用于界定已知覆盖，不代表每个后续版本都已重复实测：
+0.3.2 在四台前台运行的 VMware 来宾中各通过 23 项检查，另有 6 项跨会话检查，共 98 项，零失败、零跳过。每台均核对完整/区域截图、移动、单击/双击、拖动、滚轮、键盘事件、ASCII、中文/表情/多行文字、画面条件及持键时拒绝文本；文字以应用 JSON 精确读回验证。
 
 | 环境 | 已验证 | 覆盖缺口 |
 | --- | --- | --- |
-| VMware / Windows 11 | 截图、多会话、来宾辅助 Unicode 文本精确读回、画面条件 | 不代表所有 Windows 应用都接受相同粘贴方式 |
-| VMware / Windows 10 | 截图、多会话、画面条件 | 未作为 Unicode 文本输入验收目标 |
-| Linux / TigerVNC Xvnc / X11 | 原生 UTF-8 与 VMware 辅助文本通道精确读回，Hextile / RAW 像素一致性 | 新增画面条件未在该环境实测 |
-| Wayland、其他桌面与其他 VNC 服务 | 有相应通道实现或协议检查 | 尚无实机兼容性结论 |
+| VMware / Windows 11 | 全套 23 项，系统 PowerShell / STA 准备剪贴板，WinForms 应用读回 | 不代表所有 Windows 应用都接受相同粘贴方式 |
+| VMware / Windows 10 | 全套 23 项，系统 PowerShell / STA 准备剪贴板，WinForms 应用读回 | 同上；未覆盖所有受保护桌面 |
+| VMware / Ubuntu 26.10 / GNOME Wayland | 全套 23 项使用 Xwayland GTK 3 夹具；另在原生 Wayland GTK 应用中精确读回 Unicode 文本 | 剪贴板明确使用 X11 / xclip 桥接；本环境 wl-copy / wl-paste 准备超时，不能据此宣称原生 Wayland 后端可用 |
+| VMware / Debian 13.6 / Openbox X11 | 全套 23 项，xclip 准备剪贴板，GTK 3 应用读回 | 未覆盖其他 Linux 桌面组合 |
 
-有限时长测试不证明多日稳定性或所有网络故障下的行为。当前发布版本的自动检查结果见 [GitHub Actions](https://github.com/OvOyezi/VMware_VNC/actions/workflows/checks.yml)，本机检查结果写入 `checks/results/`，不随包发布。
+本轮 VMware 内置服务未协商 UTF-8 Extended Clipboard，Unicode 使用显式绑定的来宾剪贴板后端。原生 UTF-8 剪贴板与 Hextile / RAW 像素一致性的 TigerVNC X11 实机覆盖来自 0.2.0，未在本版重复实测。其他服务端仍需单独验收。
+
+四台并行的三分钟只读检查完成 731 次截图，含计划重连与旧 ID 拒绝，未出现错误。默认人工服务回归共 159 项通过。有限时长测试不证明多日稳定性或所有网络故障下的行为。当前自动检查见 [GitHub Actions](https://github.com/OvOyezi/VMware_VNC/actions/workflows/checks.yml)，本机报告与截图在 `checks/results/`，不随包发布。
 
 ## 自动检查
 
@@ -33,10 +35,10 @@
 
 ## 实机验收
 
-1. 明确目标地址及端口，准备独立测试窗口。`checks/fixtures/textbox_windows.ps1` 和 `textbox_linux.py` 可把实际收到的文本写入指定 JSON；`visual_windows.ps1` 提供可控变化区域。
+1. 明确目标地址及端口，准备独立测试窗口。`checks/fixtures/input_windows.ps1`、`input_linux.py` 提供文本、按钮、拖动和滚轮区域，并记录真实事件；简单文本或画面检查也可使用 textbox / visual 夹具。
 2. Windows 文字窗口在已登录桌面用系统 PowerShell 5.1 / STA 运行；Linux 窗口在目标显示会话用 Python 3 运行。来宾启动和文件传递使用该环境已有的工具，按夹具参数指定临时文件。
 3. 显式连接 VNC，截图确认窗口与坐标后提交输入或等待条件。核对应用结果；文本读回仅作预期的 CRLF/LF 规范化，不能把剪贴板确认代替应用读回。
-4. 多桌面只读验收使用 `checks/vnc_mcp_multisession_live.py`；持续截图检查使用 `vnc_mcp_soak.py --allow-live`，均显式指定端点。参数见 [检查工具](../checks/README.md)。
+4. 四来宾完整输入验收使用 `checks/vnc_mcp_input_live.py --allow-live`，配合私有 manifest 和 profile；GTK 坐标验收使用 X11，Wayland 会话可运行 Xwayland 夹具。多桌面只读检查使用 `vnc_mcp_multisession_live.py`，持续截图检查使用 `vnc_mcp_soak.py --allow-live`。参数见 [检查工具](../checks/README.md)。
 5. 失败或取消时停止，不自动重放输入。结束后断开测试连接，关闭自己的测试窗口并删除自己的临时文件。
 
 ## 协议与实现参考

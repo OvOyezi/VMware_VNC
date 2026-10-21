@@ -26,6 +26,7 @@ from .visual import VisualFrame, VisualReference, reference_from_file
 
 
 _REACTOR_START_LOCK = threading.Lock()
+MIN_KEY_EVENT_GAP_MS = 20
 
 
 class _ClipboardClient(VNCDoToolClient):
@@ -527,12 +528,22 @@ class VNCSession:
             if self._mouse_button_is_held(button):
                 raise ValueError("cannot drag with a mouse button that is already held; release it first")
             distance = max(abs(x2 - x1), abs(y2 - y1))
-            step = max(1, (distance + 29) // 30)
+            steps = min(30, distance)
             with self._input_action() as control:
                 self._position_pointer(x1, y1, control)
                 self._held_buttons.add(button)
                 self._call("mouseDown", buttons[button])
-                self._call("mouseDrag", x2, y2, step=step)
+                control.wait(0.08)
+                for index in range(1, steps + 1):
+                    control.check()
+                    if index == steps:
+                        x, y = x2, y2
+                    else:
+                        fraction = index / steps
+                        x = round(x1 + (x2 - x1) * fraction)
+                        y = round(y1 + (y2 - y1) * fraction)
+                    self._call("mouseMove", x, y)
+                    control.wait(0.02)
                 control.wait(0.08)
                 self._call("mouseUp", buttons[button])
                 self._discard_mouse_button(button)
@@ -635,28 +646,33 @@ class VNCSession:
                 self._discard_mouse_button(button)
             return {"mouse_up": button, "x": x, "y": y}
 
+    def _effective_key_delay(self, text: str, delay_ms: int) -> int:
+        effective_delay_ms = max(delay_ms, MIN_KEY_EVENT_GAP_MS)
+        wire_length = len(text.replace("\r", ""))
+        if max(0, wire_length - 1) * effective_delay_ms / 1000 >= self.action_timeout:
+            raise ValueError("effective typing gaps exceed the action time budget; send smaller chunks")
+        return effective_delay_ms
+
     def type_text(self, text: str, delay_ms: int = 0) -> dict[str, Any]:
         validate_text(text)
         if not 0 <= delay_ms <= 1000:
             raise ValueError("delay_ms must be between 0 and 1000")
         wire_text = text.replace("\r", "")
-        if max(0, len(wire_text) - 1) * delay_ms / 1000 >= self.action_timeout:
-            raise ValueError("requested typing delays exceed the action time budget; send smaller chunks")
+        effective_delay_ms = self._effective_key_delay(text, delay_ms)
         with self._lock:
             self._require_client()
             control = self._control or ActionControl(time.monotonic() + self.action_timeout)
-            batch_size = 1 if delay_ms else 64
             try:
-                for start in range(0, len(wire_text), batch_size):
+                for index, char in enumerate(wire_text):
                     control.check()
-                    self._call("type_batch", wire_text[start:start + batch_size], control)
-                    if delay_ms and start + batch_size < len(wire_text):
-                        control.wait(delay_ms / 1000.0)
+                    self._call("type_batch", char, control)
+                    if index + 1 < len(wire_text):
+                        control.wait(effective_delay_ms / 1000.0)
                 control.check()
             except (ActionCancelled, ActionTimedOut):
                 self.disconnect()
                 raise
-            return {"typed_characters": len(text)}
+            return {"typed_characters": len(text), "effective_key_delay_ms": effective_delay_ms}
 
     def clipboard_set(self, text: str) -> dict[str, Any]:
         validate_text(text)
@@ -714,6 +730,9 @@ class VNCSession:
                       "application_verified": False}
             if not text:
                 return result
+            if selected == "keys":
+                effective_delay_ms = self._effective_key_delay(text, delay_ms)
+                result["effective_key_delay_ms"] = effective_delay_ms
             control = self._control or ActionControl(time.monotonic() + self.action_timeout)
             if selected == "keys":
                 if focus_x is not None:

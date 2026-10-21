@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vnc-mcp"
-version = "0.3.2"
+version = "0.3.3"
 description = "VNC screen observation and desktop input tools for virtual machines"
 readme = "README.md"
 requires-python = ">=3.11"

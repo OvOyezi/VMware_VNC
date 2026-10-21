@@ -39,7 +39,7 @@ vnc_screenshot(session_id="desktop-a", connection_id="<本次返回的 ID>")
 | vnc_key_down / vnc_key_up | key；保持 / 释放按键 |
 | vnc_mouse_down / vnc_mouse_up | x、y、button；保持 / 释放鼠标按钮 |
 | vnc_text | text、method、paste_key、focus_x/focus_y；按协商能力或绑定 profile 提交 Unicode 文本 |
-| vnc_type | 与 vnc_text 相同的默认通道；额外 delay_ms 强制逐键事件 |
+| vnc_type | 与 vnc_text 相同的默认通道；delay_ms 设置逐键间隔，键盘路径至少 20 毫秒 |
 | vnc_clipboard_set | text；协商成功使用 UTF-8 扩展，否则仅 Latin-1；只准备剪贴板 |
 | vnc_clipboard_get | 读取服务最近接收的远端剪贴板通知，可能是缓存 |
 | vnc_wait | seconds，最多 60 秒；等待后须重新截图 |
@@ -50,6 +50,8 @@ vnc_screenshot(session_id="desktop-a", connection_id="<本次返回的 ID>")
 未连接的默认会话可通过 `vnc_status()` 查询，返回 `connected=false`，不占用连接槽位。未知具名会话仍需先显式连接。
 
 点击、拖动、滚轮及显式鼠标按下/松开会先定位指针并等待 150 毫秒，避免来宾在旧位置处理按钮事件。点击、`vnc_keypress` 和滚轮脉冲保持按下 80 毫秒，连续点击或滚轮脉冲间隔 40 毫秒。等待计入动作预算；取消或超时会清理保持的输入并断开连接，不重放动作。
+
+拖动在按下后等待 80 毫秒，再按直线发送最多 30 个移动位置，每步间隔 20 毫秒，到达终点后等待 80 毫秒并松开。移动期间持续检查取消和超时。
 
 `vnc_keypress` 会拒绝与当前保持按键重叠的组合键，先用 `vnc_key_up` 释放后再操作。
 

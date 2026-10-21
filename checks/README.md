@@ -6,7 +6,7 @@
 | --- | --- |
 | vnc_mcp_smoke.py | MCP 初始化、模拟连接、截图像素与输入协议 |
 | vnc_mcp_regression.py | refresh / fresh 生命周期、状态清理及本项目 CLI |
-| vnc_mcp_deep_checks.py | 队列、取消、预算、编码与当前输入完整性 |
+| vnc_mcp_deep_checks.py | 队列、取消、输入前预算核对、按键时间戳、拖动顺序与终点、编码及分段输入完整性 |
 | vnc_mcp_multisession.py | 会话隔离、ID、容量、空闲回收与并发 reactor 启动 |
 | vnc_mcp_diagnostics.py | 运行依赖诊断及可选剪贴板后端发现的只读边界 |
 | vnc_mcp_extensions.py | UTF-8 协商、惰性请求、sync-flush、profile、来宾剪贴板与缓冲释放 |
@@ -40,6 +40,8 @@
 ```
 
 该命令会操作真实来宾桌面，不能作为默认回归运行。JSON 报告按目标列出 `passed`、`failed` 和 `not_executed` 步骤；非零退出码表示失败或未完成。
+
+任务限定纯 VNC 时，不运行这个依赖 `vmrun` 读回的驱动。改用 VNC MCP 在真实系统应用和常用第三方应用中操作，以截图核对结果；逐键文字显式选择 `method="keys"`。本轮真实应用与重复操作范围见 [兼容性](../docs/COMPATIBILITY.md)。
 
 ## 测试窗口
 

@@ -101,6 +101,7 @@ class Peer(socketserver.BaseRequestHandler):
                 elif message == 4:
                     down, key = struct.unpack(">B2xI", self.read(7))
                     owner.events.append(("key", bool(down), key))
+                    owner.key_event_times.append((bool(down), key, time.monotonic()))
                 elif message == 5:
                     mask, x, y = struct.unpack(">BHH", self.read(5))
                     owner.events.append(("pointer", mask, x, y))
@@ -122,7 +123,7 @@ class Fixture:
         self.name, self.color = name, color
         self.password = password
         self.silent = self.closed = False
-        self.events, self.errors = [], []
+        self.events, self.key_event_times, self.errors = [], [], []
         self.honor_regions = honor_regions
         self.framebuffer_requests = []
         self.connections = set()

@@ -979,7 +979,8 @@ class ExtensionChecks(unittest.TestCase):
             ), mock.patch.object(
                 session, "type_text", side_effect=lambda text: calls.append(("type", text))
             ) as type_text:
-                session.send_text("typed text", method="keys", focus_x=5, focus_y=5)
+                result = session.send_text("typed text", method="keys", focus_x=5, focus_y=5)
+            self.assertEqual(result["effective_key_delay_ms"], 20)
             self.assertEqual(
                 calls,
                 [("click", 5, 5), ("wait", 0.15), ("type", "typed text")],
@@ -1041,6 +1042,7 @@ class ExtensionChecks(unittest.TestCase):
                     else:
                         result = session.send_text(text, method=method, delay_ms=25)
                         self.assertEqual(result["transport"], "keys")
+                        self.assertEqual(result["effective_key_delay_ms"], 25)
                         type_text.assert_called_once_with(text, 25)
                         click.assert_not_called()
                         clipboard_set.assert_not_called()

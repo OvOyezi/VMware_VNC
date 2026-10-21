@@ -351,8 +351,32 @@ async def mcp_checks(args, report, a, b, auth):
                     a, lambda events: len(wheel_pulses(events, wheel_cancel_start)) >= 2
                 )
                 assert wheel_pulses(cancelled_wheel_events, wheel_cancel_start) == [16, 0]
-                await connect(a)
+                current_connection = await connect(a)
                 checks["cancelled_wheel_pulse_releases_and_clears_connection"] = True
+
+                successful_drag_start = len(a.events)
+                successful_drag = await call(
+                    "vnc_drag", x1=8, y1=9, x2=48, y2=36, button="left"
+                )
+                successful_drag_events = await wait_for_events(a, lambda events: any(
+                    event == ("pointer", 0, 48, 36)
+                    for event in pointer_events(events, successful_drag_start)
+                ))
+                successful_drag_pointers = pointer_events(
+                    successful_drag_events, successful_drag_start
+                )
+                assert successful_drag == {
+                    "dragged": "left", "from": [8, 9], "to": [48, 36],
+                    "session_id": current_connection["session_id"],
+                    "connection_id": current_connection["connection_id"],
+                }
+                assert len(successful_drag_pointers) == 33
+                assert successful_drag_pointers[0] == ("pointer", 0, 8, 9)
+                assert successful_drag_pointers[1] == ("pointer", 1, 8, 9)
+                assert all(event[1] & 1 for event in successful_drag_pointers[2:-1])
+                assert successful_drag_pointers[-2] == ("pointer", 1, 48, 36)
+                assert successful_drag_pointers[-1] == ("pointer", 0, 48, 36)
+                checks["drag_interpolates_up_to_30_steps_and_releases_at_endpoint"] = True
 
                 drag_cancel_start = len(a.events)
                 drag_request_id = session._request_id
@@ -378,6 +402,7 @@ async def mcp_checks(args, report, a, b, auth):
                 drag_down_index = next(index for index, event in enumerate(drag_pointers) if event[1] & 1)
                 assert drag_pointers[drag_down_index][2:] == (8, 9)
                 assert drag_released(released_drag_events)
+                assert sum(bool(event[1] & 1) for event in drag_pointers) == 1
                 await connect(a)
                 checks["cancelled_drag_releases_button_and_clears_connection"] = True
 
@@ -659,15 +684,49 @@ def backend_checks(args, report, a, b):
 
     candidate = VNCSession(.5, "fresh")
     candidate.connect("127.0.0.1", a.port)
+    timing_key_count = keys(a, 100)
+    timing_event_count = len(a.key_event_times)
+    typing_result = candidate.type_text("d" * 4)
+    wait_for_events_sync(a, lambda events: keys(a, 100) >= timing_key_count + 4)
+    down_times = [timestamp for down, key, timestamp in a.key_event_times[timing_event_count:]
+                  if down and key == 100]
+    key_gaps = [later - earlier for earlier, later in zip(down_times, down_times[1:])]
+    assert typing_result["effective_key_delay_ms"] == 20
+    assert len(down_times) == 4 and min(key_gaps) >= 0.019
+    metrics["default_key_event_minimum_gap_seconds"] = round(min(key_gaps), 4)
+    checks["default_key_typing_spaces_local_rfb_events"] = True
+    candidate.disconnect()
+
+    short_budget = VNCSession(.5, "fresh", action_timeout=0.03)
+    short_budget.connect("127.0.0.1", a.port)
+    before_preflight = len(a.events)
+    try:
+        short_budget.send_text("abc", method="keys", focus_x=5, focus_y=5)
+        raise AssertionError("minimum typing gaps were not preflighted")
+    except ValueError as exc:
+        assert "action time budget" in str(exc)
+    assert len(a.events) == before_preflight and short_budget.status()["connected"]
+    short_budget.disconnect()
+    checks["minimum_typing_gap_budget_rejects_before_focus_or_key_input"] = True
+
+    candidate = VNCSession(.5, "fresh")
+    candidate.connect("127.0.0.1", a.port)
     durations = []
+    chunk_size = 100
     for _ in range(5):
         count = keys(a, 100)
         tick = time.monotonic()
-        candidate.type_text("d" * 2000)
-        deadline = time.monotonic() + 2
-        while keys(a, 100) < count + 2000:
-            assert time.monotonic() < deadline
-            time.sleep(.001)
+        sent = 0
+        for start in range(0, 2000, chunk_size):
+            chunk_length = min(chunk_size, 2000 - start)
+            result = candidate.type_text("d" * chunk_length)
+            assert result == {
+                "typed_characters": chunk_length,
+                "effective_key_delay_ms": 20,
+            }
+            sent += chunk_length
+            wait_for_events_sync(a, lambda events, expected=count + sent: keys(a, 100) >= expected)
+            assert keys(a, 100) == count + sent
         received = keys(a, 100) - count
         assert received == 2000
         durations.append(time.monotonic() - tick)

@@ -211,7 +211,7 @@ async def vnc_type(text: str, delay_ms: int = 0, connection_id: str | None = Non
                    method: Literal["auto", "keys", "clipboard", "guest"] = "auto",
                    paste_key: Literal["ctrl-v", "ctrl-shift-v", "shift-insert", "meta-v"] = "ctrl-v",
                    focus_x: int | None = None, focus_y: int | None = None) -> dict:
-    """Submit text using Unicode clipboard or an explicit guest profile. Explicit method=keys sends keysyms; delay_ms spaces key events and is valid only with keys/auto. Auto never guesses Unicode-key support. Verify the target application afterward."""
+    """Submit text using Unicode clipboard or an explicit guest profile. Key-based typing uses a minimum 20 ms gap between characters; delay_ms raises that gap and is valid only with keys/auto. Auto never guesses Unicode-key support. Verify the target application afterward."""
     return await _run("send_text", text, method, paste_key, focus_x, focus_y, delay_ms,
                       session_id=session_id, connection_id=connection_id)
 

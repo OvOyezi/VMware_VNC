@@ -13,6 +13,9 @@ from typing import Any, Callable
 import anyio
 
 from .operations import OperationDispatcher, SessionBackend
+from .operations import ActionTimedOut
+from .imaging import validate_encoding
+from .visual import VisualCondition, VisualWaitResult, VisualWatch
 
 
 log = logging.getLogger(__name__)
@@ -39,6 +42,7 @@ class _Entry:
     retiring: bool = False
     last_status: dict | None = None
     status_checked_at: float | None = None
+    visual_waiting: bool = False
 
 
 class SessionRegistry:
@@ -135,6 +139,71 @@ class SessionRegistry:
                 raise ConnectionError("VNC target changed or disconnected during wait")
             return SessionResult({"waited_seconds": seconds}, session_id, after["connection_id"])
 
+    async def wait_for_visual(self, condition: str = "stable", reference_id: str | None = None,
+                              region: tuple[int, int, int, int] | None = None, timeout: float = 10.0,
+                              interval: float = 0.25, stable_for: float = 0.5,
+                              pixel_threshold: int = 8, max_changed_ratio: float = 0.001,
+                              image_format: str = "jpeg", quality: int = 80,
+                              session_id: str = DEFAULT_SESSION, connection_id: str | None = None) -> SessionResult:
+        settings = VisualCondition(condition, timeout, interval, stable_for, pixel_threshold, max_changed_ratio)
+        image_format = validate_encoding(image_format, quality)
+        if condition == "stable" and reference_id is not None:
+            raise ValueError("stable samples its own initial frame; omit reference_id")
+        if condition != "stable" and not reference_id:
+            raise ValueError("changed and matches require a remembered screenshot reference_id")
+        self._require_guard(session_id, connection_id)
+        started = time.monotonic()
+        deadline = started + timeout if timeout else None
+        async with self._lease(session_id) as entry:
+            if entry.visual_waiting:
+                raise RuntimeError("a visual wait is already active for this session")
+            entry.visual_waiting = True
+            try:
+                before = await entry.dispatcher.run("status", pin=False)
+                self._remember(entry, before)
+                if not before["connected"]:
+                    raise ConnectionError("Not connected; call vnc_connect first")
+                expected = before["connection_id"]
+                if connection_id is not None and connection_id != expected:
+                    raise ConnectionError("VNC target changed; inspect the current desktop before retrying")
+                reference = None
+                if reference_id is not None:
+                    reference = await entry.dispatcher.run("visual_reference", reference_id, region,
+                                                           connection_id=expected)
+                    region = reference.region
+                watch = VisualWatch(settings, reference)
+                last_frame, matched, last_observed = None, False, started
+                total_bytes, total_capture_seconds = 0, 0.0
+                while True:
+                    try:
+                        frame = await entry.dispatcher.run("visual_sample", region, connection_id=expected, deadline=deadline)
+                    except ActionTimedOut:
+                        if last_frame is None or deadline is None or time.monotonic() < deadline:
+                            raise
+                        break
+                    last_observed = time.monotonic()
+                    matched = await asyncio.to_thread(watch.observe, frame, last_observed)
+                    last_frame = frame
+                    total_bytes += frame.transport_bytes
+                    total_capture_seconds += frame.capture_seconds
+                    if matched or deadline is None or time.monotonic() >= deadline:
+                        break
+                    # No backend/dispatcher lock, worker or image encoder is held
+                    # between samples. Other actions and sessions remain usable.
+                    await asyncio.sleep(min(interval, max(0, deadline-time.monotonic())))
+                image = await asyncio.to_thread(last_frame.encode, image_format, quality)
+                after = await entry.dispatcher.run("status", connection_id=expected)
+                self._remember(entry, after)
+                if not after["connected"] or after["connection_id"] != expected:
+                    raise ConnectionError("VNC target changed or disconnected during visual wait")
+                details = watch.metadata(matched, time.monotonic()-started, last_observed)
+                details.update(reference_id=reference_id, sampled_transport_bytes=total_bytes,
+                               sampled_capture_seconds=round(total_capture_seconds, 6),
+                               last_sample_age_seconds=round(time.monotonic()-last_observed, 6))
+                return SessionResult(VisualWaitResult(image, details), session_id, expected)
+            finally:
+                entry.visual_waiting = False
+
     def inventory(self) -> dict:
         now = time.monotonic()
         return {
@@ -148,6 +217,7 @@ class SessionRegistry:
                     "outstanding_calls": entry.users,
                     "pending_work_operations": entry.dispatcher.pending,
                     "closing": entry.retiring,
+                    "visual_wait_active": entry.visual_waiting,
                     "idle_seconds": round(max(0, now - entry.last_used), 3) if not entry.users else 0,
                     "last_known_status": dict(entry.last_status) if entry.last_status is not None else None,
                     "status_age_seconds": round(now - entry.status_checked_at, 3) if entry.status_checked_at is not None else None,

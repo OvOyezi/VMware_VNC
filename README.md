@@ -2,6 +2,8 @@
 
 一个可独立安装的 `vmware-vnc` 技能，附带 VNC MCP 服务与 CLI。宿主为 Windows，来宾可以是 Windows、Linux 或其他提供 VNC 的系统。VNC 负责截图与桌面交互，VMware 官方 vmrun 负责电源、文件和来宾命令。
 
+0.3.0 增加画面条件等待：按区域等待变化、与参考图匹配或持续稳定，返回最终截图和明确的 matched / timed_out。等待期间不发送输入，轮询间释放会话队列，只编码最终返回的图。区域截图同时请求对应的 RFB 矩形，实际流量取决于服务端响应。使用方式见 [画面条件](references/visual-waits.md)。
+
 0.2.0 新增 Unicode 文本通道：标准 UTF-8 Extended Clipboard，以及 VMware 内置 VNC 不支持该扩展时的显式 vmrun 辅助通道。传输按实际能力选择无损 Hextile 或 RAW，截图返回捕获耗时和 RFB 收包字节数。兼容性、验证证据与限制见 [兼容性记录](docs/COMPATIBILITY.md)，中文输入配置见 [文本输入](references/text-input.md)。
 
 | 项目 | 说明 |

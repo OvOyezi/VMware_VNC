@@ -225,7 +225,7 @@ async def run(args, report, fixture):
                 report["checks"]["out_of_bounds_input_rejected"] = True
                 chinese_clipboard = await session.call_tool("vnc_clipboard_set", {"text": "中文"})
                 assert chinese_clipboard.isError
-                report["limitations"].append("Chinese clipboard is explicitly unsupported by this implementation; Unicode keyboard events reached only the synthetic server.")
+                report["limitations"].append("This fixture has only the legacy Latin-1 clipboard. UTF-8 clipboard and guest-text channels are covered separately; keyboard events here reached only a synthetic server.")
                 payload(await session.call_tool("vnc_key_down", {"key": "shift"}))
                 payload(await session.call_tool("vnc_mouse_down", {"x": 5, "y": 6, "button": "right"}))
                 disconnected = payload(await session.call_tool("vnc_disconnect"))

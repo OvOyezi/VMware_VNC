@@ -1,5 +1,7 @@
 # VNC 操作参考
 
+按画面条件等待变化、匹配或稳定时，见 [visual-waits.md](visual-waits.md)。`vnc_screenshot(remember=true)` 返回连接内参考 ID，`vnc_wait_for` 返回最终图和条件结果；普通定时 `vnc_wait` 仍可用。
+
 以下调用省略宿主提供的工具前缀，以当前聊天中 `vmware_vnc` MCP 注册的实际工具为准。真实桌面操作必须先满足 SKILL.md 的授权与目标要求。
 
 ## 连接与截图
@@ -25,7 +27,8 @@ vnc_screenshot(session_id="WIN11", connection_id="<本次返回的 ID>")
 | vnc_diagnostics | 无参数；读取本机运行依赖与 vmrun 发现信息 |
 | vnc_status | session_id；等待该会话此前操作后读取实时状态 |
 | vnc_sessions | 无参数；非阻塞缓存清单，不证明端点此刻仍在线 |
-| vnc_screenshot | image_format、quality、region |
+| vnc_screenshot | image_format、quality、region、remember；记住参考时返回 reference_id |
+| vnc_wait_for | condition、reference_id、region、timeout、interval、stable_for、pixel_threshold、max_changed_ratio；见画面条件参考 |
 | vnc_click | x、y、button（left/middle/right）、count（1–3） |
 | vnc_move | x、y |
 | vnc_drag | x1、y1、x2、y2、button |
@@ -69,6 +72,8 @@ $vnc = "$skillRoot/.venv/Scripts/vnc-mcp.exe"
 ```
 
 输出目录须先创建。截图命令返回本地文件绝对路径及原生尺寸信息；读取图像核对后再继续。CLI 强制提供 host 和 port，默认从 VNC_PASSWORD 读取密码，只有显式 `--ask-password` 才提示输入；非交互自动化不要使用密码提示。
+
+点击的两个位置参数依次为桌面原生 `x y`，例如 `& $vnc click --host $vncHost --port $vncPort $x $y --button left --count 1`。端点和坐标变量须来自已确认的目标及刚检查过的截图；不要直接使用示例端点或猜测坐标。完整参数可查 `& $vnc click --help`。
 
 `vnc-mcp doctor` 为只读本机诊断；`vnc-mcp profiles --profiles-file <本机配置>` 列出端点。文字命令支持 `text --text-file <UTF-8 文件> --profile <名称> --profiles-file <文件> --focus X Y`，仍须显式提供 host、port。
 

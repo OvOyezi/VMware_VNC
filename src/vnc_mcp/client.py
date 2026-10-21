@@ -14,11 +14,13 @@ from uuid import uuid4
 from vncdotool import api, rfb
 from vncdotool.client import VNCDoToolClient, VNCDoToolFactory
 from twisted.internet import reactor
+from twisted.internet.defer import Deferred
 
-from .imaging import Screenshot, encode_frame, validate_encoding
+from .imaging import Screenshot, validate_encoding, validate_region
 from .operations import ActionCancelled, ActionControl, ActionTimedOut
 from .clipboard import ExtendedClipboard, MAX_CLIPBOARD_BYTES, validate_text
 from .guest import GuestProfile, VmrunGuest
+from .visual import VisualFrame, VisualReference, reference_from_file
 
 
 _REACTOR_START_LOCK = threading.Lock()
@@ -104,7 +106,7 @@ class _ClipboardClient(VNCDoToolClient):
     def copy_text(self, text: str) -> None:
         self.factory.latest_clipboard = text
 
-    def capture_frame(self, frames: list) -> Any:
+    def capture_frame(self, frames: list, region: tuple[int, int, int, int] | None = None) -> Any:
         # Keep the proxy's Deferred result as the protocol, just as captureScreen
         # does. Only copy a completed framebuffer here; CPU-heavy encoding must
         # run outside the reactor so unrelated connections can keep processing.
@@ -114,7 +116,16 @@ class _ClipboardClient(VNCDoToolClient):
             frames.append(self.screen.copy())
             return self
 
-        deferred = self.refreshScreen(incremental=False)
+        if region is None:
+            deferred = self.refreshScreen(incremental=False)
+        else:
+            x, y, width, height = validate_region(region, self.width, self.height)
+            # The upstream first-rectangle path assumes an origin of (0,0).
+            # Establish its native canvas before a partial first frame arrives.
+            if self.screen is None and (x, y, width, height) != (0, 0, self.width, self.height):
+                self.updateDesktopSize(self.width, self.height)
+            deferred = self.deferred = Deferred()
+            self.framebufferUpdateRequest(x=x, y=y, width=width, height=height, incremental=False)
         deferred.addCallback(capture)
         return deferred
 
@@ -175,6 +186,7 @@ class VNCSession:
             raise ValueError("network_encoding must be auto, raw or hextile")
         self.network_encoding = network_encoding
         self.guest_profile: GuestProfile | None = None
+        self._visual_reference: VisualReference | None = None
         self.timeout = timeout
         self.screenshot_mode = screenshot_mode
         self.action_timeout = action_timeout
@@ -246,7 +258,7 @@ class VNCSession:
                 control.check()
                 return result
             except (ActionCancelled, ActionTimedOut):
-                if method not in {"capture", "screenshot", "status", "clipboard_get"}:
+                if method not in {"capture", "screenshot", "status", "clipboard_get", "visual_sample", "visual_reference"}:
                     self.disconnect()
                 raise
             finally:
@@ -261,6 +273,7 @@ class VNCSession:
             self.host = self.port = self.name = self.width = self.height = None
             self.connection_id = None
             self.guest_profile = None
+            self._visual_reference = None
             if client is not None:
                 self._close_client(client, keys, buttons)
             return self.status()
@@ -347,11 +360,56 @@ class VNCSession:
         image = self.capture(image_format, quality)
         return image.data, image.width, image.height
 
-    def capture(self, image_format: str = "png", quality: int = 80, region: tuple[int, int, int, int] | None = None) -> Screenshot:
+    def capture(self, image_format: str = "png", quality: int = 80, region: tuple[int, int, int, int] | None = None,
+                remember: bool = False) -> Screenshot:
         image_format = validate_encoding(image_format, quality)
+        if not isinstance(remember, bool):
+            raise ValueError("remember must be a boolean")
+        with self._lock:
+            frame = self._capture_frame(region).crop(region)
+            if remember:
+                frame.require_bounded()
+            image = frame.encode(image_format, quality)
+            if remember:
+                reference_id = uuid4().hex
+                self._visual_reference = VisualReference(reference_id, frame)
+                image = replace(image, reference_id=reference_id)
+            return image
+
+    def visual_sample(self, region: tuple[int, int, int, int] | None = None) -> VisualFrame:
+        with self._lock:
+            return self._capture_frame(region).crop(region).require_bounded()
+
+    def remember_visual(self, region: tuple[int, int, int, int] | None = None) -> str:
+        """CLI baseline without an image encoding that will never be returned."""
+        with self._lock:
+            frame = self.visual_sample(region)
+            reference_id = uuid4().hex
+            self._visual_reference = VisualReference(reference_id, frame)
+            return reference_id
+
+    def visual_reference(self, reference_id: str, region: tuple[int, int, int, int] | None = None) -> VisualFrame:
+        with self._lock:
+            self._require_client()
+            reference = self._visual_reference
+            if reference is None or reference.reference_id != reference_id:
+                raise ValueError("unknown, replaced or expired visual reference; take a screenshot with remember=true")
+            return reference.frame.crop(region)
+
+    def load_visual_reference(self, filename: str, region: tuple[int, int, int, int] | None = None) -> str:
+        """Load an explicit CLI reference; MCP references come from inspected screenshots."""
+        with self._lock:
+            frame = reference_from_file(filename, self.visual_sample(region))
+            reference_id = uuid4().hex
+            self._visual_reference = VisualReference(reference_id, frame)
+            return reference_id
+
+    def _capture_frame(self, region: tuple[int, int, int, int] | None = None) -> VisualFrame:
         with self._lock:
             started = time.monotonic()
             client = self._require_client()
+            if region is not None:
+                validate_region(region, self.width or client.protocol.width, self.height or client.protocol.height)
             before_bytes = client.factory.received_bytes
             frames = []
             if self.screenshot_mode == "fresh":
@@ -362,24 +420,26 @@ class VNCSession:
                 endpoint_host = f"[{self.host}]" if ":" in self.host and not self.host.startswith("[") else self.host
                 snapshot = self._connect_client(f"{endpoint_host}::{self.port}", client.factory.password)
                 try:
-                    snapshot.capture_frame(frames)
+                    snapshot.capture_frame(frames, region)
                 finally:
                     self._close_client(snapshot)
                 transport_bytes = snapshot.factory.received_bytes
                 wire_encoding = snapshot.factory.wire_encoding
             else:
-                self._call("capture_frame", frames)
+                self._call("capture_frame", frames, region)
                 transport_bytes = client.factory.received_bytes - before_bytes
                 wire_encoding = client.factory.wire_encoding
             if not frames:
                 raise RuntimeError("VNC client did not report screen dimensions")
             frame = frames[0]
             self.width, self.height = frame.size
+            reference = self._visual_reference
+            if reference is not None and (reference.frame.desktop_width, reference.frame.desktop_height) != frame.size:
+                self._visual_reference = None
             if self._control is not None:
                 self._control.check()
-            image = encode_frame(frame, image_format, quality, region)
-            return replace(image, capture_seconds=round(time.monotonic() - started, 6),
-                           transport_bytes=transport_bytes, wire_encoding=wire_encoding)
+            return VisualFrame(frame, *frame.size, capture_seconds=time.monotonic()-started,
+                               transport_bytes=transport_bytes, wire_encoding=wire_encoding)
 
     def _check_point(self, x: int, y: int) -> None:
         client = self._require_client()

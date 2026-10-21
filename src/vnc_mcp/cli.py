@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import getpass
 import json
 import os
@@ -35,12 +36,41 @@ def _password(env_name: str, ask: bool = False) -> str | None:
     return None
 
 
+async def _wait_for_visual(session, args):
+    from .sessions import SessionRegistry
+
+    registry = SessionRegistry(lambda: session, idle_timeout=0)
+    region = tuple(args.region) if args.region else None
+    try:
+        reference_id = None
+        if args.reference_file:
+            reference_id = await asyncio.to_thread(session.load_visual_reference, args.reference_file, region)
+        elif args.condition == "changed":
+            reference_id = await asyncio.to_thread(session.remember_visual, region)
+        return await registry.wait_for_visual(
+            args.condition, reference_id, region, args.wait_timeout, args.interval, args.stable_for,
+            args.pixel_threshold, args.max_changed_ratio, args.image_format, args.quality,
+            connection_id=session.connection_id,
+        )
+    finally:
+        await registry.close()
+
+
 def _run_action(args: argparse.Namespace) -> int:
     from .client import VNCSession
     from .guest import load_profiles
 
     session = None
+    status_code = 0
     try:
+        if args.command == "wait-for":
+            from .visual import VisualCondition
+            VisualCondition(args.condition, args.wait_timeout, args.interval, args.stable_for,
+                            args.pixel_threshold, args.max_changed_ratio)
+            if args.condition == "matches" and not args.reference_file:
+                raise ValueError("matches requires --reference-file; use a PNG for exact comparisons")
+            if args.condition == "stable" and args.reference_file:
+                raise ValueError("stable samples its own initial frame; omit --reference-file")
         profile = None
         if args.profile:
             profiles = load_profiles(args.profiles_file)
@@ -88,12 +118,20 @@ def _run_action(args: argparse.Namespace) -> int:
             result = session.clipboard_set(args.text)
         elif args.command == "wait":
             result = session.wait(args.seconds)
+        elif args.command == "wait-for":
+            waited = asyncio.run(_wait_for_visual(session, args))
+            image = waited.value.screenshot
+            target = Path(args.output or ("wait-result.jpg" if args.image_format == "jpeg" else "wait-result.png"))
+            target.write_bytes(image.data)
+            result = {"saved": str(target.resolve()), **image.metadata(), **waited.value.details,
+                      "connection_id": waited.connection_id}
+            status_code = 0 if waited.value.details["matched"] else 3
         elif args.command == "status":
             result = status
         else:
             raise ValueError(f"Unsupported command: {args.command}")
         print(json.dumps(result, ensure_ascii=False))
-        return 0
+        return status_code
     except Exception as exc:
         print(f"vnc-mcp: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
@@ -173,6 +211,19 @@ def build_parser() -> argparse.ArgumentParser:
     wait = sub.add_parser("wait", help="wait for the desktop to respond")
     _connection_options(wait)
     wait.add_argument("seconds", type=float, default=1.0, nargs="?")
+    visual = sub.add_parser("wait-for", help="wait for sampled visual change, a reference image, or a stable region")
+    _connection_options(visual)
+    visual.add_argument("--condition", choices=("changed", "matches", "stable"), default="stable")
+    visual.add_argument("--reference-file", help="explicit PNG/JPEG matching the selected region; required for matches")
+    visual.add_argument("--region", nargs=4, type=int, metavar=("X", "Y", "WIDTH", "HEIGHT"))
+    visual.add_argument("--wait-timeout", type=float, default=10.0, help="visual condition budget in seconds; separate from network --timeout")
+    visual.add_argument("--interval", type=float, default=0.25)
+    visual.add_argument("--stable-for", type=float, default=0.5)
+    visual.add_argument("--pixel-threshold", type=int, default=8)
+    visual.add_argument("--max-changed-ratio", type=float, default=0.001)
+    visual.add_argument("--format", dest="image_format", choices=("png", "jpeg"), default="png")
+    visual.add_argument("--quality", type=int, default=80)
+    visual.add_argument("--output", help="final screenshot, saved on both match and timeout")
     return parser
 
 

@@ -58,7 +58,8 @@ class OperationDispatcher:
     def pending(self) -> int:
         return self._pending
 
-    async def run(self, method: str, *args: Any, connection_id: str | None = None, pin: bool = True) -> Any:
+    async def run(self, method: str, *args: Any, connection_id: str | None = None, pin: bool = True,
+                  deadline: float | None = None) -> Any:
         expected = connection_id if connection_id is not None else self.session.connection_id
         if self._closing:
             raise ConnectionError("VNC server is shutting down")
@@ -69,7 +70,8 @@ class OperationDispatcher:
             async with self._lock:
                 if self._closing:
                     raise ConnectionError("VNC server is shutting down")
-                control = ActionControl(time.monotonic() + self.session.action_timeout)
+                action_deadline = time.monotonic() + self.session.action_timeout
+                control = ActionControl(min(action_deadline, deadline) if deadline is not None else action_deadline)
                 self._active = control
                 worker = asyncio.create_task(asyncio.to_thread(
                     self.session.execute, method, args, control, expected, pin,

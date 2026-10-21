@@ -20,9 +20,10 @@ class Screenshot:
     capture_seconds: float | None = None
     transport_bytes: int | None = None
     wire_encoding: str | None = None
+    reference_id: str | None = None
 
     def metadata(self) -> dict:
-        return {
+        metadata = {
             "desktop_width": self.desktop_width, "desktop_height": self.desktop_height,
             "origin_x": self.x, "origin_y": self.y, "width": self.width, "height": self.height,
             "format": self.image_format, "bytes": len(self.data),
@@ -31,6 +32,9 @@ class Screenshot:
             "transport_bytes": self.transport_bytes,
             "wire_encoding": self.wire_encoding,
         }
+        if self.reference_id is not None:
+            metadata["reference_id"] = self.reference_id
+        return metadata
 
 
 def validate_encoding(image_format: str, quality: int) -> str:
@@ -42,14 +46,19 @@ def validate_encoding(image_format: str, quality: int) -> str:
     return image_format
 
 
-def encode_frame(frame: Image.Image, image_format: str, quality: int, region: tuple[int, int, int, int] | None = None) -> Screenshot:
-    image_format = validate_encoding(image_format, quality)
-    desktop_width, desktop_height = frame.size
+def validate_region(region: tuple[int, int, int, int] | None, desktop_width: int, desktop_height: int) -> tuple[int, int, int, int]:
     x, y, width, height = region if region is not None else (0, 0, desktop_width, desktop_height)
     if any(not isinstance(value, int) or isinstance(value, bool) for value in (x, y, width, height)):
         raise ValueError("region values must be integers")
     if x < 0 or y < 0 or width <= 0 or height <= 0 or x + width > desktop_width or y + height > desktop_height:
         raise ValueError(f"region must be inside the {desktop_width}x{desktop_height} desktop")
+    return x, y, width, height
+
+
+def encode_frame(frame: Image.Image, image_format: str, quality: int, region: tuple[int, int, int, int] | None = None) -> Screenshot:
+    image_format = validate_encoding(image_format, quality)
+    desktop_width, desktop_height = frame.size
+    x, y, width, height = validate_region(region, desktop_width, desktop_height)
     image = frame if region is None else frame.crop((x, y, x + width, y + height))
     output = BytesIO()
     options = {"quality": quality, "subsampling": 0, "optimize": True} if image_format == "jpeg" else {}

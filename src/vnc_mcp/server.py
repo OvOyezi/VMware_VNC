@@ -76,6 +76,8 @@ mcp = FastMCP(
         "the inspected screenshot; the focus click clears any existing text selection. "
         "Use official vmrun for VMware power, files and guest commands. "
         "A sent paste is not proof that the application accepted text. Never replay failed input automatically. "
+        "Use vnc_screenshot(remember=true) before an action when you need a pixel reference, then vnc_wait_for "
+        "changed/matches, or stable without a reference. These are sampled visual conditions, not application readiness. "
         "Call vnc_screenshot again after actions to verify the result."
     ),
 )
@@ -139,10 +141,10 @@ async def vnc_sessions() -> dict:
 
 
 @mcp.tool()
-async def vnc_screenshot(image_format: Literal["jpeg", "png"] = "jpeg", quality: int = 80, region: ScreenshotRegion | None = None, connection_id: str | None = None, session_id: str = DEFAULT_SESSION) -> list:
-    """Capture the native desktop or a region {x,y,width,height}. JPEG quality: 1-95; PNG is lossless. A region's origin must be added to image-local click coordinates. No scaling."""
+async def vnc_screenshot(image_format: Literal["jpeg", "png"] = "jpeg", quality: int = 80, region: ScreenshotRegion | None = None, connection_id: str | None = None, session_id: str = DEFAULT_SESSION, remember: bool = False) -> list:
+    """Capture the native desktop or a region {x,y,width,height}. JPEG quality: 1-95; PNG is lossless. Add region origin to image-local coordinates. remember=true returns a reference_id for vnc_wait_for; only the latest reference per connection is retained, until replacement, resize or disconnect. No scaling."""
     box = (region.x, region.y, region.width, region.height) if region is not None else None
-    result = await REGISTRY.run("capture", image_format, quality, box, session_id=session_id, connection_id=connection_id)
+    result = await REGISTRY.run("capture", image_format, quality, box, remember, session_id=session_id, connection_id=connection_id)
     image = result.value
     return [
         json.dumps({**image.metadata(), "session_id": result.session_id, "connection_id": result.connection_id}),
@@ -230,6 +232,24 @@ async def vnc_clipboard_get(connection_id: str | None = None, session_id: str = 
 async def vnc_wait(seconds: float = 1.0, connection_id: str | None = None, session_id: str = DEFAULT_SESSION) -> dict:
     """Wait up to 60 seconds for an application to respond before taking another screenshot."""
     return (await REGISTRY.wait(seconds, session_id, connection_id)).as_dict()
+
+
+@mcp.tool()
+async def vnc_wait_for(condition: Literal["changed", "matches", "stable"] = "stable",
+                       reference_id: str | None = None, region: ScreenshotRegion | None = None,
+                       timeout: float = 10.0, interval: float = 0.25, stable_for: float = 0.5,
+                       pixel_threshold: int = 8, max_changed_ratio: float = 0.001,
+                       image_format: Literal["jpeg", "png"] = "jpeg", quality: int = 80,
+                       connection_id: str | None = None, session_id: str = DEFAULT_SESSION) -> list:
+    """Read-only sampled visual condition, returning the final screenshot and matched/timed_out. changed/matches need a reference_id from screenshot(remember=true); stable uses its own first frame and needs no reference. A pixel changes when any RGB channel differs by more than pixel_threshold; matches allows at most max_changed_ratio of pixels to change. Stable compares to one anchor for stable_for seconds. Region must be inside the reference. Timeout 0 samples once (changed/matches); other timeouts are 0-60 seconds. Polling releases the session queue between samples, never sends input, and never reconnects. A stable or matching picture does not prove application readiness. Always pass both IDs for named sessions."""
+    box = (region.x, region.y, region.width, region.height) if region is not None else None
+    result = await REGISTRY.wait_for_visual(condition, reference_id, box, timeout, interval, stable_for,
+                                            pixel_threshold, max_changed_ratio, image_format, quality,
+                                            session_id, connection_id)
+    image = result.value.screenshot
+    return [json.dumps({**image.metadata(), **result.value.details,
+                        "session_id": result.session_id, "connection_id": result.connection_id}),
+            Image(data=image.data, format=image_format)]
 
 
 def run() -> None:

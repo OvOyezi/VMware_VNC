@@ -81,17 +81,19 @@ class Peer(socketserver.BaseRequestHandler):
                     _, count = struct.unpack(">BH", self.read(3))
                     self.read(count * 4)
                 elif message == 3:
-                    self.read(9)
+                    incremental, x0, y0, requested_width, requested_height = struct.unpack("!BHHHH", self.read(9))
+                    owner.framebuffer_requests.append((incremental, x0, y0, requested_width, requested_height))
                     if owner.silent:
                         continue
                     bpp, _, endian, _, rm, gm, bm, rs, gs, bs = pixel_format
                     frame = bytearray()
-                    for y in range(48):
-                        for x in range(64):
+                    x0, y0, width, height = (x0, y0, requested_width, requested_height) if owner.honor_regions else (0, 0, 64, 48)
+                    for y in range(y0, y0 + height):
+                        for x in range(x0, x0 + width):
                             r, g, b = owner.rgb(x, y)
                             value = ((r * rm // 255) << rs) | ((g * gm // 255) << gs) | ((b * bm // 255) << bs)
                             frame.extend(value.to_bytes(bpp // 8, "big" if endian else "little"))
-                    self.request.sendall(b"\x00\x00\x00\x01" + struct.pack(">HHHHi", 0, 0, 64, 48, 0) + frame)
+                    self.request.sendall(b"\x00\x00\x00\x01" + struct.pack(">HHHHi", x0, y0, width, height, 0) + frame)
                     if not clipboard_sent:
                         text = (owner.name + " clipboard").encode()
                         self.request.sendall(b"\x03\x00\x00\x00" + struct.pack(">I", len(text)) + text)
@@ -116,11 +118,13 @@ class Peer(socketserver.BaseRequestHandler):
 
 
 class Fixture:
-    def __init__(self, name, color, password=None):
+    def __init__(self, name, color, password=None, honor_regions=False):
         self.name, self.color = name, color
         self.password = password
         self.silent = self.closed = False
         self.events, self.errors = [], []
+        self.honor_regions = honor_regions
+        self.framebuffer_requests = []
         self.connections = set()
         self.accepted = 0
         self.lock = threading.Lock()

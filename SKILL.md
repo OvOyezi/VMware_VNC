@@ -1,6 +1,6 @@
 ---
 name: vmware-vnc
-description: Visually operate Windows, Linux or other VM desktops through VNC from a Windows host. Use for authorized screenshots, mouse and keyboard input, Unicode text, multi-VM sessions and connection diagnosis. Pair the bundled MCP or CLI with official vmrun for VMware power, files and guest commands.
+description: Visually operate Windows, Linux or other VM desktops through VNC from a Windows host. Use for authorized screenshots, visual condition waits, mouse and keyboard input, Unicode text, multi-VM sessions and connection diagnosis. Pair the bundled MCP or CLI with official vmrun for VMware power, files and guest commands.
 license: Apache-2.0
 ---
 
@@ -35,12 +35,15 @@ license: Apache-2.0
 
 需要具体工具参数、区域坐标、多桌面并行或 CLI 命令时，读 [references/operations.md](references/operations.md)。输入中文、表情、多行文字或配置来宾辅助通道时，先读 [references/text-input.md](references/text-input.md)。
 
+需要等待窗口变化或画面稳定时，读 [references/visual-waits.md](references/visual-waits.md)。在动作前用 `vnc_screenshot(remember=true)` 保存比较参考，再等待 changed / matches；stable 会采样自己的起始画面。检查返回的 matched，不能仅因拿到截图就认定条件满足。画面条件成立后仍须检查实际应用结果。
+
 ## 操作边界
 
 - 鼠标坐标始终使用桌面原生坐标；区域图内坐标须加上截图返回的原点。截图不缩放。
 - 多桌面用不同 session_id。省略它会访问独立的 default 会话，不会自动选择刚连接的具名会话。`vnc_sessions` 用于缓存状态清单，`vnc_status` 用于实时状态。
 - 失败、超时或取消的键鼠输入不得自动重放；已发送输入无法撤回。先观察当前画面和状态，再决定是否重连或继续。
 - 默认空闲 300 秒回收；过期后需显式重连并重新截图。不要复用旧 connection_id。
+- 每个连接只保留一张显式记住的参考图，新参考、尺寸变化或断开会使旧 ID 失效；普通截图不替换它。同一会话只允许一个视觉等待，取消或未满足时不自动重发之前的动作。
 - 文字用 `vnc_text` 或默认的 `vnc_type`。auto 优先使用已协商的 UTF-8 剪贴板，其次使用显式绑定的 vmrun 来宾配置；缺少可靠 Unicode 通道时提前报错。`method="keys"` 只用于确认支持相应 keysyms 的服务端。
 - 来宾辅助输入必须提供本次截图确认的 `focus_x/focus_y`。准备剪贴板后会点击该点、短暂等待再粘贴；点击会清除旧选区。先清空需要替换的内容，再提交文字。剪贴板校验与已发送粘贴都不等于应用已接收，仍须观察结果。
 - 密码通过本机环境变量提供，不写进技能、Git、示例或报告。截图和检查结果写入 `checks/results/`，私有连接资料放 `.local/`。

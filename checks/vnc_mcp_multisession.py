@@ -135,8 +135,9 @@ async def isolation_checks(args, report, a, b, c, auth):
     checks, metrics = report["checks"], report["metrics"]
     async with server(args, "isolation") as session:
         tool_list = await session.list_tools()
-        assert len(tool_list.tools) == 18
-        assert all("session_id" in tool.inputSchema["properties"] for tool in tool_list.tools if tool.name != "vnc_sessions")
+        assert {"vnc_connect", "vnc_screenshot", "vnc_text", "vnc_profiles", "vnc_diagnostics"}.issubset({tool.name for tool in tool_list.tools})
+        assert all("session_id" in tool.inputSchema["properties"] for tool in tool_list.tools
+                   if tool.name not in {"vnc_sessions", "vnc_profiles", "vnc_diagnostics"})
         checks["all_control_tools_expose_explicit_session_routing"] = True
 
         alpha, beta = await asyncio.gather(connect(session, "alpha", a), connect(session, "beta", b))

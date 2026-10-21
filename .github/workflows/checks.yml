@@ -1,0 +1,31 @@
+name: checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.15']
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install locked runtime
+        shell: pwsh
+        run: ./scripts/Setup.ps1 -PythonExecutable (Get-Command python).Source
+      - name: Test synthetic desktops only
+        shell: pwsh
+        run: ./scripts/Test.ps1
+      - name: Read-only soak harness self-test
+        shell: pwsh
+        run: ./.venv/Scripts/python.exe checks/vnc_mcp_soak.py --self-test --source . --duration 2 --interval 0.1 --output checks/results/soak-self-test.json

@@ -14,7 +14,9 @@ $checks = @(
     @{ Name = 'smoke'; Script = 'vnc_mcp_smoke.py' },
     @{ Name = 'lifecycle'; Script = 'vnc_mcp_regression.py' },
     @{ Name = 'deep'; Script = 'vnc_mcp_deep_checks.py' },
-    @{ Name = 'multisession'; Script = 'vnc_mcp_multisession.py' }
+    @{ Name = 'multisession'; Script = 'vnc_mcp_multisession.py' },
+    @{ Name = 'diagnostics'; Script = 'vnc_mcp_diagnostics.py' },
+    @{ Name = 'extensions'; Script = 'vnc_mcp_extensions.py' }
 )
 $count = 0
 foreach ($check in $checks) {

@@ -36,7 +36,7 @@ async def run(args, report):
                 await session.initialize()
                 tools = await session.list_tools()
                 report["tool_count"] = len(tools.tools)
-                assert report["tool_count"] == 18
+                assert {"vnc_connect", "vnc_screenshot", "vnc_text", "vnc_profiles", "vnc_diagnostics"}.issubset({tool.name for tool in tools.tools})
 
                 async def call(name, **arguments):
                     return payload(await session.call_tool(name, arguments))

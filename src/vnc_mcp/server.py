@@ -13,6 +13,8 @@ from pydantic import BaseModel, Field
 
 from .client import VNCSession
 from .sessions import DEFAULT_SESSION, SessionRegistry
+from .guest import load_profiles
+from .diagnostics import get_diagnostics
 
 
 def _new_session() -> VNCSession:
@@ -20,6 +22,7 @@ def _new_session() -> VNCSession:
         timeout=float(os.environ.get("VNC_TIMEOUT", "15")),
         screenshot_mode=os.environ.get("VNC_SCREENSHOT_MODE", "refresh"),
         action_timeout=float(os.environ.get("VNC_ACTION_TIMEOUT", "20")),
+        network_encoding=os.environ.get("VNC_ENCODING", "auto"),
     )
 
 
@@ -31,6 +34,7 @@ REGISTRY = SessionRegistry(
 DEFAULT_HOST = os.environ.get("VNC_HOST")
 DEFAULT_PORT = int(os.environ["VNC_PORT"]) if os.environ.get("VNC_PORT") else 0
 PASSWORD_ENV = os.environ.get("VNC_PASSWORD_ENV", "VNC_PASSWORD")
+PROFILES = load_profiles()
 
 
 @asynccontextmanager
@@ -67,20 +71,53 @@ mcp = FastMCP(
         "uses the separate legacy default session; it never selects the most recently named session. "
         "Idle sessions expire after 300 seconds by default; reconnect explicitly and inspect again. "
         "Use vnc_sessions for nonblocking inventory and vnc_status for current state. "
+        "Use vnc_text or vnc_type for literal Unicode text: auto selects negotiated UTF-8 clipboard "
+        "or an explicitly selected VMware guest profile. Guest text requires focus_x/focus_y from "
+        "the inspected screenshot; the focus click clears any existing text selection. "
+        "Use official vmrun for VMware power, files and guest commands. "
+        "A sent paste is not proof that the application accepted text. Never replay failed input automatically. "
         "Call vnc_screenshot again after actions to verify the result."
     ),
 )
 
 
 @mcp.tool()
-async def vnc_connect(host: str = "", port: int = 0, password: str = "", session_id: str = DEFAULT_SESSION) -> dict:
+async def vnc_connect(host: str = "", port: int = 0, password: str = "", session_id: str = DEFAULT_SESSION, profile: str = "") -> dict:
     """Connect host AND port (VMware ports start at 5901). Use distinct session_id names for independent desktops. Reconnecting the same name replaces only that session and returns a new connection_id. Names: 1-64 ASCII letters/digits/._-, starting with a letter or digit."""
-    target_host = host.strip() or DEFAULT_HOST
-    target_port = port or DEFAULT_PORT
+    selected = None
+    if profile:
+        if profile not in PROFILES:
+            raise ValueError("unknown guest profile; use vnc_profiles to list configured targets")
+        selected = PROFILES[profile]
+    target_host = host.strip() or (selected.host if selected else DEFAULT_HOST)
+    target_port = port or (selected.port if selected else DEFAULT_PORT)
     if not target_host or not target_port:
         raise ValueError("Provide both host and port, or set VNC_HOST and VNC_PORT before starting the server")
     target_password = password or os.environ.get(PASSWORD_ENV) or None
+    if selected is not None:
+        return await _run("connect", target_host, target_port, target_password, selected, session_id=session_id, pin=False)
     return await _run("connect", target_host, target_port, target_password, session_id=session_id, pin=False)
+
+
+@mcp.tool()
+async def vnc_profiles() -> dict:
+    """List explicit VMware guest profiles without reading or returning any credentials. Selecting a profile is required before guest text operations."""
+    return {"profiles": [PROFILES[name].public() for name in sorted(PROFILES)]}
+
+
+@mcp.tool()
+async def vnc_diagnostics() -> dict:
+    """Read-only host, Python, fixed runtime dependency and vmrun discovery information. Does not connect, start a VM, run commands or reveal credentials."""
+    return {**get_diagnostics(), "configured_profiles": len(PROFILES)}
+
+
+@mcp.tool()
+async def vnc_text(text: str, method: Literal["auto", "keys", "clipboard", "guest"] = "auto",
+                   paste_key: Literal["ctrl-v", "ctrl-shift-v", "shift-insert", "meta-v"] = "ctrl-v",
+                   connection_id: str | None = None, session_id: str = DEFAULT_SESSION,
+                   focus_x: int | None = None, focus_y: int | None = None) -> dict:
+    """Submit literal Unicode text. Auto selects negotiated UTF-8 clipboard, then a bound VMware guest profile, then Latin-1 keys. Guest text REQUIRES focus_x/focus_y from the inspected screenshot: CLI helpers can steal focus. Linux terminals may need ctrl-shift-v. Never retries or presses Enter implicitly; verify the application afterward."""
+    return await _run("send_text", text, method, paste_key, focus_x, focus_y, session_id=session_id, connection_id=connection_id)
 
 
 @mcp.tool()
@@ -168,9 +205,13 @@ async def vnc_mouse_up(x: int, y: int, button: str = "left", connection_id: str 
 
 
 @mcp.tool()
-async def vnc_type(text: str, delay_ms: int = 0, connection_id: str | None = None, session_id: str = DEFAULT_SESSION) -> dict:
-    """Type text into the focused desktop control; delay_ms optionally spaces key events."""
-    return await _run("type_text", text, delay_ms, session_id=session_id, connection_id=connection_id)
+async def vnc_type(text: str, delay_ms: int = 0, connection_id: str | None = None, session_id: str = DEFAULT_SESSION,
+                   method: Literal["auto", "keys", "clipboard", "guest"] = "auto",
+                   paste_key: Literal["ctrl-v", "ctrl-shift-v", "shift-insert", "meta-v"] = "ctrl-v",
+                   focus_x: int | None = None, focus_y: int | None = None) -> dict:
+    """Submit text using Unicode clipboard or an explicit guest profile. Explicit method=keys sends keysyms; delay_ms spaces key events and is valid only with keys/auto. Auto never guesses Unicode-key support. Verify the target application afterward."""
+    return await _run("send_text", text, method, paste_key, focus_x, focus_y, delay_ms,
+                      session_id=session_id, connection_id=connection_id)
 
 
 @mcp.tool()

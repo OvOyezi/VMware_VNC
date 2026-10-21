@@ -1,3 +1,3 @@
 interface:
   display_name: "VMware VNC"
-  short_description: "通过 VNC 截图和键鼠控制 VMware 桌面，支持独立多会话"
+  short_description: "VNC 可视化操作跨系统虚拟机，结合官方 CLI，支持中文和独立多会话"

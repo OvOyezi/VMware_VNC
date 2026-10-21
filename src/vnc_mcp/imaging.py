@@ -17,6 +17,9 @@ class Screenshot:
     y: int
     width: int
     height: int
+    capture_seconds: float | None = None
+    transport_bytes: int | None = None
+    wire_encoding: str | None = None
 
     def metadata(self) -> dict:
         return {
@@ -24,6 +27,9 @@ class Screenshot:
             "origin_x": self.x, "origin_y": self.y, "width": self.width, "height": self.height,
             "format": self.image_format, "bytes": len(self.data),
             "coordinates": "Native desktop coordinates: add origin_x/origin_y to image-local coordinates. No scaling.",
+            "capture_seconds": self.capture_seconds,
+            "transport_bytes": self.transport_bytes,
+            "wire_encoding": self.wire_encoding,
         }
 
 

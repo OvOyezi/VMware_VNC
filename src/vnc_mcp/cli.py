@@ -9,8 +9,7 @@ import os
 from pathlib import Path
 import sys
 
-from .client import VNCSession
-
+from . import __version__
 
 def _connection_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--host", required=True, help="VNC host or IP address")
@@ -19,6 +18,9 @@ def _connection_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--ask-password", action="store_true", help="explicitly prompt for a password; automation never prompts by default")
     parser.add_argument("--timeout", type=float, default=15.0, help="operation timeout in seconds")
     parser.add_argument("--screenshot-mode", choices=("refresh", "fresh"), default=os.environ.get("VNC_SCREENSHOT_MODE", "refresh"), help="use fresh for VMware servers with refresh timeouts")
+    parser.add_argument("--encoding", choices=("auto", "raw", "hextile"), default=os.environ.get("VNC_ENCODING", "auto"), help="lossless RFB transport encoding preference, with raw fallback")
+    parser.add_argument("--profile", help="explicit VMware guest profile to bind to this endpoint")
+    parser.add_argument("--profiles-file", help="local TOML profile file (or VNC_PROFILES_FILE)")
 
 
 def _password(env_name: str, ask: bool = False) -> str | None:
@@ -34,10 +36,21 @@ def _password(env_name: str, ask: bool = False) -> str | None:
 
 
 def _run_action(args: argparse.Namespace) -> int:
+    from .client import VNCSession
+    from .guest import load_profiles
+
     session = None
     try:
-        session = VNCSession(args.timeout, screenshot_mode=args.screenshot_mode)
-        status = session.connect(args.host, args.port, _password(args.password_env, args.ask_password))
+        profile = None
+        if args.profile:
+            profiles = load_profiles(args.profiles_file)
+            if args.profile not in profiles:
+                raise ValueError("unknown guest profile")
+            profile = profiles[args.profile]
+            if not profile.matches(args.host, args.port):
+                raise ValueError("guest profile endpoint does not match host and port")
+        session = VNCSession(args.timeout, screenshot_mode=args.screenshot_mode, network_encoding=args.encoding)
+        status = session.connect(args.host, args.port, _password(args.password_env, args.ask_password), profile)
         if args.command == "connect":
             result: object = status
         elif args.command == "screenshot":
@@ -56,7 +69,19 @@ def _run_action(args: argparse.Namespace) -> int:
         elif args.command == "keypress":
             result = session.keypress(args.key)
         elif args.command == "type":
-            result = session.type_text(args.text, args.delay_ms)
+            result = session.send_text(args.text, args.method, args.paste_key,
+                                       *(args.focus or (None, None)), delay_ms=args.delay_ms)
+        elif args.command == "text":
+            if (args.text is None) == (args.text_file is None):
+                raise ValueError("provide exactly one of text or --text-file")
+            if args.text_file:
+                path = Path(args.text_file)
+                if path.stat().st_size > 1024 * 1024:
+                    raise ValueError("text file exceeds the byte limit")
+                text = path.read_text(encoding="utf-8-sig")
+            else:
+                text = args.text
+            result = session.send_text(text, args.method, args.paste_key, *(args.focus or (None, None)))
         elif args.command == "clipboard-get":
             result = session.clipboard_get()
         elif args.command == "clipboard-set":
@@ -84,8 +109,12 @@ def _run_action(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vnc-mcp", description="VNC desktop controls and MCP stdio server")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("mcp", help="run the MCP stdio server")
+    sub.add_parser("doctor", help="read-only local runtime and vmrun discovery report")
+    profiles = sub.add_parser("profiles", help="list configured endpoints without reading credentials")
+    profiles.add_argument("--profiles-file")
     for name in ("connect", "status"):
         command = sub.add_parser(name, help=f"connect and show VNC {name} information")
         _connection_options(command)
@@ -125,6 +154,16 @@ def build_parser() -> argparse.ArgumentParser:
     _connection_options(type_command)
     type_command.add_argument("text")
     type_command.add_argument("--delay-ms", type=int, default=0)
+    type_command.add_argument("--method", choices=("auto", "keys", "clipboard", "guest"), default="auto")
+    type_command.add_argument("--paste-key", choices=("ctrl-v", "ctrl-shift-v", "shift-insert", "meta-v"), default="ctrl-v")
+    type_command.add_argument("--focus", nargs=2, type=int, metavar=("X", "Y"), help="observed input control coordinates; required for guest text")
+    literal = sub.add_parser("text", help="submit Unicode text using negotiated clipboard or an explicit guest profile")
+    _connection_options(literal)
+    literal.add_argument("text", nargs="?")
+    literal.add_argument("--text-file", help="UTF-8 input file; text is never a shell command")
+    literal.add_argument("--method", choices=("auto", "keys", "clipboard", "guest"), default="auto")
+    literal.add_argument("--paste-key", choices=("ctrl-v", "ctrl-shift-v", "shift-insert", "meta-v"), default="ctrl-v")
+    literal.add_argument("--focus", nargs=2, type=int, metavar=("X", "Y"), help="observed input control coordinates; required for guest text")
     subcommands = (("clipboard-get", None), ("clipboard-set", "text"))
     for name, value in subcommands:
         command = sub.add_parser(name, help=f"remote clipboard {name.removeprefix('clipboard-')}")
@@ -140,6 +179,18 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    if args.command == "doctor":
+        from .diagnostics import get_diagnostics
+        print(json.dumps(get_diagnostics(), ensure_ascii=False))
+        return 0
+    if args.command == "profiles":
+        from .guest import load_profiles
+        try:
+            print(json.dumps({"profiles": [profile.public() for profile in load_profiles(args.profiles_file).values()]}, ensure_ascii=False))
+            return 0
+        except (OSError, ValueError) as exc:
+            print(f"vnc-mcp: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 1
     if args.command == "mcp":
         from .server import run as run_mcp
         run_mcp()

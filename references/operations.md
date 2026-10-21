@@ -20,7 +20,9 @@ vnc_screenshot(session_id="WIN11", connection_id="<本次返回的 ID>")
 
 | 工具 | 主要参数 / 行为 |
 | --- | --- |
-| vnc_connect | host、port、session_id；重连同名会话会生成新 connection_id |
+| vnc_connect | host、port、session_id；或显式 profile 读取已配置端点；重连同名会话会生成新 connection_id |
+| vnc_profiles | 无参数；列出配置端点，不读取凭据 |
+| vnc_diagnostics | 无参数；读取本机运行依赖与 vmrun 发现信息 |
 | vnc_status | session_id；等待该会话此前操作后读取实时状态 |
 | vnc_sessions | 无参数；非阻塞缓存清单，不证明端点此刻仍在线 |
 | vnc_screenshot | image_format、quality、region |
@@ -31,13 +33,18 @@ vnc_screenshot(session_id="WIN11", connection_id="<本次返回的 ID>")
 | vnc_keypress | key，例如 enter、ctrl-c、alt-tab、f5 |
 | vnc_key_down / vnc_key_up | key；保持 / 释放按键 |
 | vnc_mouse_down / vnc_mouse_up | x、y、button；保持 / 释放鼠标按钮 |
-| vnc_type | text、delay_ms；输入到当前焦点控件 |
-| vnc_clipboard_set | text；仅 Latin-1 |
+| vnc_text | text、method、paste_key、focus_x/focus_y；按协商能力或绑定 profile 提交 Unicode 文本 |
+| vnc_type | 与 vnc_text 相同的默认通道；额外 delay_ms 强制逐键事件 |
+| vnc_clipboard_set | text；协商成功使用 UTF-8 扩展，否则仅 Latin-1；只准备剪贴板 |
 | vnc_clipboard_get | 读取服务最近接收的远端剪贴板通知，可能是缓存 |
 | vnc_wait | seconds，最多 60 秒；等待后须重新截图 |
 | vnc_disconnect | 断开指定连接并清理保持的输入 |
 
 同一会话按顺序执行，默认至多 16 个未完成请求，包含异步等待。不同会话可独立工作。并行操作只用于已确认身份的不同桌面，不向同一桌面并发发送依赖前一步结果的输入。
+
+文字输入与来宾配置见 [text-input.md](text-input.md)。截图元数据另含 capture_seconds、transport_bytes、wire_encoding；前两者是本次客户端捕获耗时与该阶段接收的 RFB 字节数，fresh 包含短截图连接的握手，refresh 可能含同期通知。它们不代表应用响应时间或整个系统的带宽。
+
+VNC_ENCODING / CLI `--encoding` 可选 auto、hextile、raw。auto 优先无损 Hextile，并提供 RAW。服务端决定实际编码；VMware 内置 VNC 实机仍选 RAW。当前固定依赖的 ZRLE 解码有兼容性问题，未向服务端声明支持。
 
 ## 多桌面
 
@@ -63,6 +70,8 @@ $vnc = "$skillRoot/.venv/Scripts/vnc-mcp.exe"
 
 输出目录须先创建。截图命令返回本地文件绝对路径及原生尺寸信息；读取图像核对后再继续。CLI 强制提供 host 和 port，默认从 VNC_PASSWORD 读取密码，只有显式 `--ask-password` 才提示输入；非交互自动化不要使用密码提示。
 
+`vnc-mcp doctor` 为只读本机诊断；`vnc-mcp profiles --profiles-file <本机配置>` 列出端点。文字命令支持 `text --text-file <UTF-8 文件> --profile <名称> --profiles-file <文件> --focus X Y`，仍须显式提供 host、port。
+
 ## 验收
 
 默认 `scripts/Test.ps1` 只操作人工 RFB 服务，不需要真实桌面授权。
@@ -74,3 +83,5 @@ $vnc = "$skillRoot/.venv/Scripts/vnc-mcp.exe"
 ```
 
 该检查要求至少两台目标，配置条目名为 vmware_vnc；只连接、截图和断开，不发送键鼠，但仍属于真实桌面 Computer Use。不要用示例端口代替用户确认的目标。历史实机通过不能替代本次端点和当前聊天的验证。
+
+需要持续截图与生命周期压力测试时，使用 `checks/vnc_mcp_soak.py`。必须显式传 `--allow-live` 和 `--targets NAME=HOST:PORT`；它不发送键鼠或剪贴板，每 50 轮计划重连单个目标并拒绝旧 ID，任何失败立即停止且不自动恢复。输出为统计 JSON。默认不连接真实端点，`--self-test` 仅连接人工 RFB。

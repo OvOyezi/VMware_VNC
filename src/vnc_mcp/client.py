@@ -3,23 +3,83 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
+from functools import partial
+import struct
 import threading
 import time
 from typing import Any
 from uuid import uuid4
 
-from vncdotool import api
+from vncdotool import api, rfb
 from vncdotool.client import VNCDoToolClient, VNCDoToolFactory
 from twisted.internet import reactor
 
 from .imaging import Screenshot, encode_frame, validate_encoding
 from .operations import ActionCancelled, ActionControl, ActionTimedOut
+from .clipboard import ExtendedClipboard, MAX_CLIPBOARD_BYTES, validate_text
+from .guest import GuestProfile, VmrunGuest
 
 
 _REACTOR_START_LOCK = threading.Lock()
 
 
 class _ClipboardClient(VNCDoToolClient):
+    def dataReceived(self, data: bytes) -> None:
+        self.factory.received_bytes += len(data)
+        super().dataReceived(data)
+
+    def setEncodings(self, encodings) -> None:
+        preference = self.factory.network_encoding
+        # vncdotool 1.4.2's ZRLE packed-palette reader ignores per-row
+        # padding. Do not advertise it: real narrow TigerVNC rectangles fail.
+        choices = {"auto": [rfb.Encoding.HEXTILE, rfb.Encoding.RAW],
+                   "hextile": [rfb.Encoding.HEXTILE, rfb.Encoding.RAW], "raw": [rfb.Encoding.RAW]}
+        pseudos = [value for value in encodings if value < 0]
+        super().setEncodings([*choices[preference], *pseudos, rfb.Encoding.PSEUDO_EXTENDED_CLIPBOARD])
+
+    def _handleRectangle(self, block: bytes) -> None:
+        encoding = struct.unpack("!HHHHi", block)[4]
+        if encoding >= 0:
+            self.factory.wire_encoding = {0: "raw", 5: "hextile", 16: "zrle"}.get(encoding, str(encoding))
+        super()._handleRectangle(block)
+
+    def _handleServerCutText(self, block: bytes) -> None:
+        length, = struct.unpack("!3xi", block)
+        if abs(length) > MAX_CLIPBOARD_BYTES or (length < 0 and length > -4):
+            self.factory.protocol_error = "clipboard_size_limit"
+            self.transport.abortConnection()
+            return
+        self.expect(self._receive_clipboard, abs(length), length < 0)
+
+    def _receive_clipboard(self, block: bytes, extended: bool) -> None:
+        try:
+            if extended:
+                messages, text, sent = self.factory.ext_clipboard.receive(block)
+                for message in messages:
+                    self.transport.write(message)
+                if text is not None:
+                    self.copy_text(text)
+                    self.factory.clipboard_encoding = "utf-8"
+                if sent:
+                    self.factory.clipboard_sent.set()
+            else:
+                self.copy_text(block.decode("iso-8859-1"))
+                self.factory.clipboard_encoding = "iso-8859-1"
+        except (ValueError, struct.error) as exc:
+            self.factory.protocol_error = "invalid_extended_clipboard: " + str(exc)[:200]
+            self.transport.abortConnection()
+            return
+        self.expect(self._handleConnection, 1)
+
+    def set_clipboard_utf8(self, text: str) -> _ClipboardClient:
+        message, sent = self.factory.ext_clipboard.set_text(text)
+        self.factory.clipboard_sent.clear()
+        self.transport.write(message)
+        if sent:
+            self.factory.clipboard_sent.set()
+        return self
+
     def connectionMade(self) -> None:
         self.factory.active_protocol = self
         if self.factory.close_requested:
@@ -28,8 +88,18 @@ class _ClipboardClient(VNCDoToolClient):
         super().connectionMade()
 
     def connectionLost(self, reason: Any) -> None:
-        self.factory.closed.set()
-        super().connectionLost(reason)
+        try:
+            super().connectionLost(reason)
+        finally:
+            # The upstream proxy/factory/Deferred form reference cycles. Fresh
+            # snapshots must not keep multi-megabyte framebuffers alive until
+            # a cyclic GC pass; release large and private state on closure.
+            self.screen = None
+            self._packet.clear()
+            self.factory.active_protocol = None
+            self.factory.latest_clipboard = ""
+            self.factory.ext_clipboard.local_text = None
+            self.factory.closed.set()
 
     def copy_text(self, text: str) -> None:
         self.factory.latest_clipboard = text
@@ -77,8 +147,15 @@ class _ClipboardFactory(VNCDoToolFactory):
     protocol = _ClipboardClient
     force_caps = True
 
-    def __init__(self) -> None:
+    def __init__(self, network_encoding: str = "auto") -> None:
         super().__init__()
+        self.network_encoding = network_encoding
+        self.wire_encoding: str | None = None
+        self.received_bytes = 0
+        self.ext_clipboard = ExtendedClipboard()
+        self.clipboard_sent = threading.Event()
+        self.clipboard_encoding = "iso-8859-1"
+        self.protocol_error: str | None = None
         self.latest_clipboard = ""
         self.closed = threading.Event()
         self.close_requested = False
@@ -86,13 +163,18 @@ class _ClipboardFactory(VNCDoToolFactory):
 
 
 class VNCSession:
-    def __init__(self, timeout: float = 15.0, screenshot_mode: str = "refresh", action_timeout: float = 20.0) -> None:
+    def __init__(self, timeout: float = 15.0, screenshot_mode: str = "refresh", action_timeout: float = 20.0,
+                 network_encoding: str = "auto") -> None:
         if not math.isfinite(timeout) or not 0 < timeout <= 60:
             raise ValueError("timeout must be finite and between 0 and 60 seconds")
         if not math.isfinite(action_timeout) or not 0 < action_timeout <= 60:
             raise ValueError("action_timeout must be finite and between 0 and 60 seconds")
         if screenshot_mode not in {"refresh", "fresh"}:
             raise ValueError("screenshot_mode must be refresh or fresh")
+        if network_encoding not in {"auto", "raw", "hextile"}:
+            raise ValueError("network_encoding must be auto, raw or hextile")
+        self.network_encoding = network_encoding
+        self.guest_profile: GuestProfile | None = None
         self.timeout = timeout
         self.screenshot_mode = screenshot_mode
         self.action_timeout = action_timeout
@@ -108,11 +190,14 @@ class VNCSession:
         self._held_keys: set[str] = set()
         self._held_buttons: set[str] = set()
 
-    def connect(self, host: str, port: int = 5900, password: str | None = None) -> dict[str, Any]:
+    def connect(self, host: str, port: int = 5900, password: str | None = None,
+                profile: GuestProfile | None = None) -> dict[str, Any]:
         if not host.strip():
             raise ValueError("host must not be empty")
         if not 1 <= port <= 65535:
             raise ValueError("port must be between 1 and 65535")
+        if profile is not None and not profile.matches(host, port):
+            raise ValueError("guest profile endpoint does not match this VNC connection")
         with self._lock:
             self.disconnect()
             endpoint_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
@@ -126,6 +211,7 @@ class VNCSession:
                 self.disconnect()
                 raise
             self.host, self.port = host, port
+            self.guest_profile = profile
             raw_name = getattr(self.client.protocol, "name", "")
             self.name = raw_name.decode("utf-8", "replace") if isinstance(raw_name, bytes) else str(raw_name)
             screen = getattr(self.client.protocol, "screen", None)
@@ -140,7 +226,8 @@ class VNCSession:
         # Only serialize creation through the first reactor callback; desktop
         # negotiation and all steady-state operations remain independent.
         with _REACTOR_START_LOCK:
-            client = api.connect(endpoint, password=password, timeout=self.timeout, factory_class=_ClipboardFactory)
+            client = api.connect(endpoint, password=password, timeout=self.timeout,
+                                 factory_class=partial(_ClipboardFactory, self.network_encoding))
             ready = threading.Event()
             reactor.callFromThread(ready.set)
             if not ready.wait(self.timeout):
@@ -173,6 +260,7 @@ class VNCSession:
             self._held_buttons.clear()
             self.host = self.port = self.name = self.width = self.height = None
             self.connection_id = None
+            self.guest_profile = None
             if client is not None:
                 self._close_client(client, keys, buttons)
             return self.status()
@@ -219,11 +307,21 @@ class VNCSession:
                 "name": self.name,
                 "width": self.width,
                 "height": self.height,
+                "guest_profile": self.guest_profile.name if self.guest_profile else None,
+                "capabilities": {
+                    "utf8_clipboard": bool(self.client and self.client.factory.ext_clipboard.supported),
+                    "guest_text": self.guest_profile is not None,
+                    "preferred_encoding": self.network_encoding,
+                    "wire_encoding": self.client.factory.wire_encoding if self.client else None,
+                },
             }
 
     def _require_client(self) -> Any:
         if self.client is not None and self.client.factory.closed.is_set():
+            reason = self.client.factory.protocol_error
             self.disconnect()
+            if reason:
+                raise ConnectionError(f"RFB protocol rejected ({reason}); reconnect explicitly after inspecting the target")
         if self.client is None:
             raise ConnectionError("Not connected; call vnc_connect first")
         return self.client
@@ -252,7 +350,9 @@ class VNCSession:
     def capture(self, image_format: str = "png", quality: int = 80, region: tuple[int, int, int, int] | None = None) -> Screenshot:
         image_format = validate_encoding(image_format, quality)
         with self._lock:
+            started = time.monotonic()
             client = self._require_client()
+            before_bytes = client.factory.received_bytes
             frames = []
             if self.screenshot_mode == "fresh":
                 # Some VMware VNC servers do not answer repeated full-refresh
@@ -265,15 +365,21 @@ class VNCSession:
                     snapshot.capture_frame(frames)
                 finally:
                     self._close_client(snapshot)
+                transport_bytes = snapshot.factory.received_bytes
+                wire_encoding = snapshot.factory.wire_encoding
             else:
                 self._call("capture_frame", frames)
+                transport_bytes = client.factory.received_bytes - before_bytes
+                wire_encoding = client.factory.wire_encoding
             if not frames:
                 raise RuntimeError("VNC client did not report screen dimensions")
             frame = frames[0]
             self.width, self.height = frame.size
             if self._control is not None:
                 self._control.check()
-            return encode_frame(frame, image_format, quality, region)
+            image = encode_frame(frame, image_format, quality, region)
+            return replace(image, capture_seconds=round(time.monotonic() - started, 6),
+                           transport_bytes=transport_bytes, wire_encoding=wire_encoding)
 
     def _check_point(self, x: int, y: int) -> None:
         client = self._require_client()
@@ -397,8 +503,7 @@ class VNCSession:
             return {"mouse_up": button, "x": x, "y": y}
 
     def type_text(self, text: str, delay_ms: int = 0) -> dict[str, Any]:
-        if len(text) > 100_000:
-            raise ValueError("text is limited to 100,000 characters per call")
+        validate_text(text)
         if not 0 <= delay_ms <= 1000:
             raise ValueError("delay_ms must be between 0 and 1000")
         wire_text = text.replace("\r", "")
@@ -421,20 +526,101 @@ class VNCSession:
             return {"typed_characters": len(text)}
 
     def clipboard_set(self, text: str) -> dict[str, Any]:
-        if len(text) > 100_000:
-            raise ValueError("clipboard text is limited to 100,000 characters")
-        try:
-            text.encode("iso-8859-1")
-        except UnicodeEncodeError as exc:
-            raise ValueError("VNC clipboard text supports ISO-8859-1 characters only") from exc
+        validate_text(text)
         with self._lock:
+            client = self._require_client()
+            if client.factory.ext_clipboard.supported:
+                self._call("set_clipboard_utf8", text)
+                # Notify transfers ownership; lazy X11 servers request bytes
+                # only when an application pastes. Waiting here would deadlock
+                # the very Ctrl+V that causes Request -> Provide.
+                return {"clipboard_characters": len(text), "encoding": "utf-8", "clipboard_offered": True,
+                        "clipboard_data_sent": client.factory.clipboard_sent.is_set(), "application_verified": False}
+            try:
+                text.encode("iso-8859-1")
+            except UnicodeEncodeError as exc:
+                raise ValueError("server has no negotiated Unicode clipboard; bind a guest profile and use vnc_text") from exc
             self._call("paste", text)
-            return {"clipboard_characters": len(text)}
+            return {"clipboard_characters": len(text), "encoding": "iso-8859-1", "application_verified": False}
 
     def clipboard_get(self) -> dict[str, Any]:
         with self._lock:
             client = self._require_client()
-            return {"text": client.factory.latest_clipboard}
+            return {"text": client.factory.latest_clipboard, "encoding": client.factory.clipboard_encoding,
+                    "cached": True}
+
+    def send_text(self, text: str, method: str = "auto", paste_key: str = "ctrl-v",
+                  focus_x: int | None = None, focus_y: int | None = None, delay_ms: int = 0) -> dict[str, Any]:
+        validate_text(text)
+        if not isinstance(delay_ms, int) or isinstance(delay_ms, bool) or not 0 <= delay_ms <= 1000:
+            raise ValueError("delay_ms must be an integer between 0 and 1000")
+        if delay_ms and method not in {"auto", "keys"}:
+            raise ValueError("delay_ms is available only for key events")
+        if delay_ms and method == "auto" and any(ord(char) > 255 for char in text):
+            raise ValueError("Unicode key events require explicit method=keys; omit delay_ms to use automatic Unicode text transport")
+        if method not in {"auto", "keys", "clipboard", "guest"}:
+            raise ValueError("text method must be auto, keys, clipboard or guest")
+        if paste_key not in {"ctrl-v", "ctrl-shift-v", "shift-insert", "meta-v"}:
+            raise ValueError("paste_key must be ctrl-v, ctrl-shift-v, shift-insert or meta-v")
+        if (focus_x is None) != (focus_y is None):
+            raise ValueError("provide both focus_x and focus_y")
+        with self._lock:
+            client = self._require_client()
+            if focus_x is not None:
+                if any(isinstance(value, bool) or not isinstance(value, int) for value in (focus_x, focus_y)):
+                    raise ValueError("focus coordinates must be integers")
+                self._check_point(focus_x, focus_y)
+            if self._held_keys or self._held_buttons:
+                raise ValueError("release held keys and mouse buttons before submitting literal text")
+            selected = "keys" if delay_ms else method
+            if selected == "auto":
+                selected = "clipboard" if client.factory.ext_clipboard.supported else "guest" if self.guest_profile else "keys"
+                if selected == "keys" and any(ord(char) > 255 for char in text):
+                    raise ValueError("Unicode text needs a negotiated UTF-8 clipboard or an explicit guest profile; use method=keys only for a server known to accept Unicode keysyms")
+            result = {"submitted_characters": len(text), "typed_characters": len(text), "transport": selected, "paste_sent": False,
+                      "application_verified": False}
+            if not text:
+                return result
+            control = self._control or ActionControl(time.monotonic() + self.action_timeout)
+            if selected == "keys":
+                if focus_x is not None:
+                    self.click(focus_x, focus_y)
+                    control.wait(0.15)
+                if delay_ms:
+                    self.type_text(text, delay_ms)
+                else:
+                    self.type_text(text)
+                return result
+            if selected == "guest":
+                profile = self.guest_profile
+                if profile is None or not profile.matches(self.host or "", self.port or 0):
+                    raise ValueError("guest text requires a profile bound to this exact VNC connection")
+                # Windows CLI-launched console helpers can steal focus even when
+                # hidden. Restore only a caller-selected point after preparation;
+                # never guess a window or paste into an unknown foreground app.
+                if focus_x is None:
+                    raise ValueError("guest text requires focus_x and focus_y from the inspected screenshot to restore the intended input control")
+                result.update(VmrunGuest(profile).prepare_clipboard(text, control))
+            else:
+                # Unicode failure is detected before sending any clipboard bytes.
+                result.update(self.clipboard_set(text))
+            control.check()
+            if focus_x is not None:
+                self.click(focus_x, focus_y)
+                # RFB orders bytes, but guests process pointer and keyboard
+                # through separate device queues. Wait for the focus click to
+                # settle before the paste chord (VMware can otherwise deliver
+                # Ctrl+V while the text control is still handling mouse-down).
+                control.wait(0.15)
+            self.keypress(paste_key)
+            result["paste_sent"] = True
+            if selected == "clipboard" and client.factory.ext_clipboard.supported:
+                until = min(control.deadline, time.monotonic() + 0.5)
+                while not client.factory.clipboard_sent.is_set() and time.monotonic() < until:
+                    control.wait(min(0.02, max(0, until - time.monotonic())))
+                    self._require_client()
+                result["clipboard_data_sent"] = client.factory.clipboard_sent.is_set()
+            return result
 
     def wait(self, seconds: float) -> dict[str, Any]:
         if not 0 <= seconds <= 60:

@@ -1,0 +1,28 @@
+# Local machine configuration: copy outside Git, e.g. .local/profiles.toml.
+# All credentials stay in the environment of the MCP/CLI process.
+version = 1
+
+[profiles.windows-guest]
+host = "127.0.0.1"
+port = 5901
+vmx = "C:/path/to/virtual-machine.vmx"
+guest_os = "windows"
+# Use the signed-in user's temporary directory, not a service-only folder.
+guest_temp_dir = "C:/Users/guest/AppData/Local/Temp"
+username_env = "VM_WINDOWS_USER"
+password_env = "VM_WINDOWS_PASSWORD"
+# Set only for an encrypted VM; omit for an unencrypted VM.
+vm_password_env = "VM_WINDOWS_ENCRYPTION_PASSWORD"
+
+# A Linux desktop can use standard VNC UTF-8 clipboard without a guest profile.
+# An optional official vmrun fallback needs Python 3 + xclip/xsel or wl-copy/wl-paste.
+# [profiles.linux-guest]
+# host = "127.0.0.1"
+# port = 5903
+# vmx = "C:/path/to/linux.vmx"
+# guest_os = "linux"
+# guest_temp_dir = "/home/guest/.cache"
+# username_env = "VM_LINUX_USER"
+# password_env = "VM_LINUX_PASSWORD"
+# display = ":0"
+# xauthority = "/home/guest/.Xauthority"

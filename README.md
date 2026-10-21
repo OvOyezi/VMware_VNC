@@ -1,6 +1,8 @@
 # VMware VNC Skill
 
-一个可独立安装的 `vmware-vnc` 技能，附带 VNC MCP 服务与 CLI。在 Windows 上通过截图与键鼠操作 VMware 或其他 VNC 桌面，支持多个虚拟机的独立会话、原生尺寸全图和区域截图。
+一个可独立安装的 `vmware-vnc` 技能，附带 VNC MCP 服务与 CLI。宿主为 Windows，来宾可以是 Windows、Linux 或其他提供 VNC 的系统。VNC 负责截图与桌面交互，VMware 官方 vmrun 负责电源、文件和来宾命令。
+
+0.2.0 新增 Unicode 文本通道：标准 UTF-8 Extended Clipboard，以及 VMware 内置 VNC 不支持该扩展时的显式 vmrun 辅助通道。传输按实际能力选择无损 Hextile 或 RAW，截图返回捕获耗时和 RFB 收包字节数。兼容性、验证证据与限制见 [兼容性记录](docs/COMPATIBILITY.md)，中文输入配置见 [文本输入](references/text-input.md)。
 
 | 项目 | 说明 |
 | --- | --- |
@@ -103,7 +105,7 @@ VMware 的电源、快照和来宾命令使用官方 vmrun；需要桌面画面�
 
 真实端点测试需明确目标及授权，不能把模拟通过写成真实虚拟机兼容性通过；具体命令见 [操作参考](references/operations.md)。当前与历史验收分开记录在 [维护状态](docs/STATUS.md)。
 
-中文直接输入尚未通过 VMware 验证，剪贴板仅支持 Latin-1。fresh 截图仍传输完整首帧；协作取消不能撤回已发送输入。长期运行、真实网络故障及 Codex 模型 WebSocket 问题不属于默认回归的验证范围。
+Windows 与 Linux 的 Unicode 剪贴板输入已完成应用级校验，具体前提与范围见兼容性记录。VMware 内置 VNC 的直接 Unicode keysyms 仍不能当作可靠输入途径。fresh 截图传输完整首帧，Hextile 只在服务端选用时减少流量；协作取消不能撤回已发送输入。默认回归不覆盖真实网络或 Codex 模型 WebSocket 问题。
 
 ## 来源
 

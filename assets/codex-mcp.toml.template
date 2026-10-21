@@ -7,3 +7,4 @@ cwd = {{SKILL_ROOT}}
 [mcp_servers.vmware_vnc.env]
 VNC_TIMEOUT = "5"
 VNC_SCREENSHOT_MODE = "fresh"
+VNC_ENCODING = "auto"

@@ -1,5 +1,7 @@
 # 来源与本地差异
 
+以下保留各阶段变更与当时结论；最新能力见末尾 0.2.0 条目。
+
 上游：[thanhvn-shinkoxd/VNC-MCP](https://github.com/thanhvn-shinkoxd/VNC-MCP/tree/abe747b4dc42bc936870959861a436c849aef482)，固定提交 `abe747b4dc42bc936870959861a436c849aef482`。只使用源码，未采用上游 dist 可执行程序。原作者及许可保留在 LICENSE、NOTICE、pyproject.toml。
 
 本地运行改动：
@@ -21,3 +23,15 @@ VNC 调查报告位于 `docs/reports/`，测试结果、截图及补丁位于 `c
 运行依赖版本由 requirements.lock.txt 固定；维护检查仅使用现有依赖。尚未解决中文直接输入、中文剪贴板、持久增量帧与长期运行验证边界。
 
 2026-10-21 将仓库根目录整理为可安装的 `vmware-vnc` skill：新增 SKILL.md、agents/openai.yaml、按需参考资料和 MCP 模板；本机硬编码的 codex-mcp.toml 改为 scripts/Get-McpConfig.ps1 按安装位置生成。README 区分本地 Git 安装、将来 GitHub 安装、技能发现和 MCP 注册。运行源码、Python 包版本与固定运行依赖未改动；未上传仓库，未自动安装技能或修改全局 Codex 配置。
+
+## 2026-10-21：0.2.0 跨系统文字与稳定性
+
+- 文字入口统一使用能力路由；新增 vnc_text、vnc_profiles、vnc_diagnostics。UTF-8 扩展优先，VMware 内置 VNC 使用显式配置的官方 vmrun 辅助通道。CLI 增加 text / profiles / doctor / --version，原 vnc_type 支持同一通道。
+- 按 RFB 文档独立实现 text-only Extended Clipboard，包含惰性 Request 与 Z_SYNC_FLUSH 兼容、大小限制和异常断开；未复制 TigerVNC/noVNC 实现。
+- 来宾辅助程序作为 Python 包资源随 wheel 安装；Windows 使用系统自带 PowerShell 5.1，Linux 使用 Python 3 与现有 X11/Wayland 剪贴板工具。文字是 JSON 数据，凭据仅由进程环境提供给官方 vmrun。Python 宿主最低版本统一为 3.11，以使用 tomllib。
+- 显式端点绑定、剪贴板 hash 校验、临时文件清理、持有输入拒绝、可取消焦点等待；返回值区分已提交、数据已发送、已发粘贴与应用尚未验证。
+- 选择无损 Hextile / RAW，并报告捕获耗时、收包字节与实际编码。实机发现固定依赖 ZRLE 行填充兼容问题，当前不协商该编码。
+- 连接关闭时主动释放帧缓冲、协议包和剪贴板，降低循环引用带来的内存峰值。
+- 增加人工服务与 mock 回归、独立文字窗口、只读实机耐久工具和本地准备的 GitHub Actions。固定运行依赖未变，源码仍只维护一份。
+
+具体实机范围、性能代价与尚未验证项见 [兼容性记录](docs/COMPATIBILITY.md)。技能安装仍不自动注册 MCP；磁盘修改也不代表当前聊天的旧 MCP 进程已重载。

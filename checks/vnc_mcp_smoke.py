@@ -206,7 +206,7 @@ async def run(args, report, fixture):
                     assert encoded.size == (64, 48) and encoded.format == "JPEG"
                 report["checks"]["default_jpeg_preserves_native_coordinates"] = True
                 payload(await session.call_tool("vnc_keypress", {"key": "ctrl+l"}))
-                payload(await session.call_tool("vnc_type", {"text": "Hi-中\n"}))
+                payload(await session.call_tool("vnc_type", {"text": "Hi-中\n", "method": "keys"}))
                 await asyncio.sleep(0.1)
                 keys = [e["key"] for e in fixture.events if e["kind"] == "key" and e["down"]]
                 assert 0x01004E2D in keys and 45 in keys and 0xFF0D in keys

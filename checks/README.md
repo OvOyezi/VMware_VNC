@@ -12,7 +12,7 @@
 | vnc_mcp_extensions.py | UTF-8 codec 与 loopback 协商、惰性请求、sync-flush、profile、取消和关闭后的缓冲释放 |
 | vnc_mcp_visual.py | 逐像素/区域条件、参考隔离、MCP 取消、轮询并发、单次最终编码、CLI 和参考文件边界 |
 
-以下工具只在显式指定端点后手动执行，不属于默认回归。对真实桌面运行时，先满足 [SKILL.md](../SKILL.md) 中的 Computer Use 授权要求。
+以下工具通过本项目的 VNC MCP 或 CLI 进行实机验收，只在显式指定端点后手动执行，不属于默认回归。目标与任务范围的要求见 [SKILL.md](../SKILL.md)。
 
 | 手动工具 | 用途与注意事项 |
 | --- | --- |

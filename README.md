@@ -64,7 +64,7 @@ VMware 中文辅助通道还需要本机 profile 和凭据环境变量，安装�
 
 ## 使用
 
-在 Codex 中调用 `$vmware-vnc`，说明目标地址、端口和任务。对真实桌面使用 Computer Use 前，需要用户明确同意该操作；仅同意安装或配置不构成桌面操作授权。已有授权在其目标和范围内持续有效。
+在 Codex 中调用 `$vmware-vnc`，说明目标地址、端口和任务。技能通过本项目的 VNC MCP 或 CLI 操作指定虚拟机；在用户已授权的目标和任务范围内直接执行，目标不清或需要超出范围时先核实。
 
 ```python
 vnc_connect(host="127.0.0.1", port=5901, session_id="work")

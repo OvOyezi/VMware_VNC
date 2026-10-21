@@ -2,7 +2,7 @@
 
 按画面条件等待变化、匹配或稳定时，见 [visual-waits.md](visual-waits.md)。`vnc_screenshot(remember=true)` 返回连接内参考 ID，`vnc_wait_for` 返回最终图和条件结果；普通定时 `vnc_wait` 仍可用。
 
-以下调用省略宿主提供的工具前缀，以当前聊天中 `vmware_vnc` MCP 注册的实际工具为准。真实桌面操作必须先满足 SKILL.md 的授权与目标要求。
+以下调用省略宿主提供的工具前缀，以当前聊天中 `vmware_vnc` MCP 注册的实际工具为准。按 [SKILL.md](../SKILL.md) 中的目标与范围操作指定虚拟机。
 
 ## 连接与截图
 
@@ -79,7 +79,7 @@ $vnc = "$skillRoot/.venv/Scripts/vnc-mcp.exe"
 
 ## 验收
 
-默认 `scripts/Test.ps1` 只操作人工 RFB 服务，不需要真实桌面授权。
+默认 `scripts/Test.ps1` 只操作人工 RFB 服务，不连接真实虚拟机。
 
 如果用户已明确同意真实端点验收，先提供地址及端口，再运行连接与截图检查，例如：
 
@@ -87,6 +87,6 @@ $vnc = "$skillRoot/.venv/Scripts/vnc-mcp.exe"
 & "$skillRoot/.venv/Scripts/python.exe" "$skillRoot/checks/vnc_mcp_multisession_live.py" --config '<实际 MCP 配置文件>' --host 127.0.0.1 --targets WIN11=5901 WIN10=5902 --output "$skillRoot/checks/results/project-live.json"
 ```
 
-该检查要求至少两台目标，配置条目名为 vmware_vnc；只连接、截图和断开，不发送键鼠，但仍属于真实桌面 Computer Use。不要用示例端口代替用户确认的目标。历史实机通过不能替代本次端点和当前聊天的验证。
+该检查通过本项目的 VNC MCP 连接至少两台目标，配置条目名为 vmware_vnc；只连接、截图和断开，不发送键鼠。不要用示例端口代替用户确认的目标。历史实机通过不能替代本次端点和当前聊天的验证。
 
 需要持续截图与生命周期压力测试时，使用 `checks/vnc_mcp_soak.py`。必须显式传 `--allow-live` 和 `--targets NAME=HOST:PORT`；它不发送键鼠或剪贴板，每 50 轮计划重连单个目标并拒绝旧 ID，任何失败立即停止且不自动恢复。输出为统计 JSON。默认不连接真实端点，`--self-test` 仅连接人工 RFB。

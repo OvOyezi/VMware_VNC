@@ -10,9 +10,9 @@ license: Apache-2.0
 
 本文件所在目录就是技能根目录。所有脚本、源码和参考资料都相对于该目录定位，不依赖原作者的工作区、全局 Python 包或当前工作目录。
 
-## 授权与目标
+## 目标与范围
 
-- 对真实桌面使用 Computer Use 前，必须取得用户明确同意使用 Computer Use 的确切答复，并明确目标及操作范围。仅同意安装、配置、整理项目，或笼统同意某个方案，不构成该授权。已有授权在其目标和范围内持续有效。
+- 在用户已授权的目标和任务范围内直接执行 VNC 操作；目标不清或需要超出范围时先核实。
 - 连接时明确提供 host、port 和便于辨认的 session_id；不得猜测虚拟机目标。VMware 端口通常从 5901 起，以实际配置为准。
 - VMware 电源和来宾命令优先用官方 vmrun；本技能负责需要画面的桌面交互。配置 VNC 或防火墙、重启虚拟机，应在用户授权的任务范围内进行。
 
@@ -52,6 +52,6 @@ license: Apache-2.0
 
 ## 验证与维护
 
-修改本技能的脚本或运行代码后，执行技能根目录的 `scripts/Test.ps1`。默认回归仅操作本机人工 RFB 桌面。真实端点验收属于 Computer Use，仍须先满足上述授权条件。跨系统兼容范围和可复现验收方式见 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)。
+修改本技能的脚本或运行代码后，执行技能根目录的 `scripts/Test.ps1`。默认回归仅操作本机人工 RFB 桌面。真实端点验收通过本项目的 VNC MCP 或 CLI，按任务中确认的目标和范围执行。跨系统兼容范围和可复现验收方式见 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)。
 
 报告时分清模拟协议测试、真实端点测试和当前聊天工具加载状态。历史报告在 `docs/reports/`，不作为当前目标已连接或操作成功的证据。维护状态见 [docs/STATUS.md](docs/STATUS.md)，来源及本地修改见 [LOCAL-CHANGES.md](LOCAL-CHANGES.md)。

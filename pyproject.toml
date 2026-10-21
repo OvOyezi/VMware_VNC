@@ -16,6 +16,11 @@ dependencies = [
   "mcp==1.30.0",
 ]
 
+[project.urls]
+Repository = "https://github.com/OvOyezi/VMware_VNC"
+Issues = "https://github.com/OvOyezi/VMware_VNC/issues"
+Changelog = "https://github.com/OvOyezi/VMware_VNC/blob/main/CHANGELOG.md"
+
 [project.scripts]
 vnc-mcp = "vnc_mcp.cli:main"
 

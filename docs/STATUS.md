@@ -2,6 +2,16 @@
 
 更新日期：2026-10-21，Asia/Shanghai。
 
+## GitHub 分发与本机状态
+
+公开仓库使用 [OvOyezi/VMware_VNC](https://github.com/OvOyezi/VMware_VNC)，`main` 分支根目录是 skill 安装入口。本地维护目录与 GitHub 使用同一份源码和提交，安装副本从该仓库获取；维护步骤见 [CONTRIBUTING.md](../CONTRIBUTING.md)。
+
+发布整理更新了 README、安装地址、版本记录和 Python 包的项目链接，运行代码与固定依赖未改变。GitHub Actions 在 Windows / Python 3.11、3.15 矩阵运行人工 RFB 检查；每次运行结果以 Actions 页面为准。
+
+本机 VNC MCP 注册、对应进程和维护目录的运行环境已移除，技能目录内没有 VNC skill 副本，也没有已配置的本机 profile 或凭据环境变量。后续安装测验从环境准备开始，默认测试不连接真实虚拟机。发布整理所需的验证在隔离目录执行，不恢复本机 MCP 注册。
+
+以下记录按各阶段保留。条目中的分支、未发布状态和聊天工具版本描述当时情况。
+
 ## 2026-10-21：0.3.0 画面条件与功能补强
 
 本地分支 `codex/visual-conditions`，尚未上传仓库。新增 vnc_wait_for、截图 remember 引用与 CLI wait-for，等待区域变化、匹配或持续稳定；逐像素比较复用 Pillow，区域请求复用现有 vncdotool / RFB，39 个锁定依赖未升级。已核查 vncdotool 的已发布版本与固定 main 提交，以及 noVNC 的区域传输讨论，适配依据见 [画面条件](../references/visual-waits.md)。
@@ -43,7 +53,7 @@ WIN11 专用测试窗口经来宾进程命令身份核对后关闭，其临时�
 - 新脚本在外部工作目录生成的 TOML 可解析，command、args、cwd 均定位安装副本。按该片段启动 MCP，初始化并列出 18 个工具成功，无默认目标，缺少端点的连接请求被拒绝。
 - 生成配置前没有环境时，脚本明确失败。全局 Codex 配置的 SHA-256 在隔离验证前后保持一致。真实虚拟机未连接，当前聊天的 MCP 未重新加载。
 
-本机证据为 [安装验证摘要](../checks/results/skill-package-validation.json)、[隔离安装测试输出](../checks/results/skill-package-tests.stdout.log)及 `checks/results/skill-installed-*.json`；它们均不进入 Git。临时安装副本在验证后清除，不作为第二维护位置或备份保留。
+本机证据为安装验证摘要 `../checks/results/skill-package-validation.json`、隔离安装测试输出 `../checks/results/skill-package-tests.stdout.log` 及 `checks/results/skill-installed-*.json`；它们均不进入 Git。临时安装副本在验证后清除，不作为第二维护位置或备份保留。
 
 本次没有真实虚拟机桌面操作授权，不执行真实端点连接、截图或输入。以下迁移记录保留其历史结论，不代表本次已重新完成实机验证。
 
@@ -66,12 +76,12 @@ WIN11 专用测试窗口经来宾进程命令身份核对后关闭，其临时�
 
 ## 证据
 
-- [基础检查](../checks/results/project-smoke.json)
-- [生命周期](../checks/results/project-lifecycle.json)
-- [深挖回归](../checks/results/project-deep.json)
-- [多会话](../checks/results/project-multisession.json)
-- [最近实机连接尝试（虚拟机关机）](../checks/results/project-live.json)
-- [本机迁移记录](../.local/project-migration.json)
+- 基础检查：`../checks/results/project-smoke.json`
+- 生命周期：`../checks/results/project-lifecycle.json`
+- 深挖回归：`../checks/results/project-deep.json`
+- 多会话：`../checks/results/project-multisession.json`
+- 最近实机连接尝试（虚拟机关机）：`../checks/results/project-live.json`
+- 本机迁移记录：`../.local/project-migration.json`
 - [调查与验证报告](reports/README.md)
 
 这些证据属于本机资料，未提交到 Git；新环境运行 scripts/Test.ps1 后生成自己的结果。

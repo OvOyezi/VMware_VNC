@@ -58,7 +58,7 @@ WIN11 / WIN10 / Linux 的 30 分钟并行 fresh 截图测试通过：901 轮、�
 
 同一 MCP 进程的 60 个资源采样中，私有提交量范围为 89.1–141.4 MB，末次为 102.0 MB；句柄数为 219–222。原始采样在 `soak-resources-final.json`。有限时长验收不能证明多日运行、故障网络或所有应用行为。
 
-GitHub Actions 工作流已准备 Windows / Python 3.11、3.15 矩阵，运行固定依赖与人工 RFB 测试。当前仓库仅本地 Git，尚未在 GitHub 执行该工作流；本机实际验证版本为 Python 3.15.0。
+0.2.0 验证阶段已准备 Windows / Python 3.11、3.15 的 GitHub Actions 矩阵，运行固定依赖与人工 RFB 测试。当时仓库仅有本地 Git，未在 GitHub 执行工作流，本机实际验证版本为 Python 3.15.0。公开仓库的运行结果见 [Actions](https://github.com/OvOyezi/VMware_VNC/actions/workflows/checks.yml)。
 
 ## 0.2.0 独立安装记录
 

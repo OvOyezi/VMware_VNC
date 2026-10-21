@@ -1,6 +1,6 @@
 # 来源与本地差异
 
-以下保留各阶段变更与当时结论；最新能力见末尾 0.2.0 条目。
+以下保留各阶段变更与当时结论；当前版本能力见 0.3.0 条目。
 
 上游：[thanhvn-shinkoxd/VNC-MCP](https://github.com/thanhvn-shinkoxd/VNC-MCP/tree/abe747b4dc42bc936870959861a436c849aef482)，固定提交 `abe747b4dc42bc936870959861a436c849aef482`。只使用源码，未采用上游 dist 可执行程序。原作者及许可保留在 LICENSE、NOTICE、pyproject.toml。
 
@@ -20,7 +20,7 @@
 
 VNC 调查报告位于 `docs/reports/`，测试结果、截图及补丁位于 `checks/results/`，手动操作场景位于 `.local/scenarios/`。按用户要求，旧代码和环境、重复归档、配置备份及临时验证目录已清除，仅以本项目维护。报告中的旧路径表示当时状态，当前工作方式以 README.md、AGENTS.md、docs/STATUS.md 为准。
 
-运行依赖版本由 requirements.lock.txt 固定；维护检查仅使用现有依赖。尚未解决中文直接输入、中文剪贴板、持久增量帧与长期运行验证边界。
+运行依赖版本由 requirements.lock.txt 固定；维护检查仅使用现有依赖。2026-10-20 的整理阶段尚未解决中文直接输入、中文剪贴板、持久增量帧与长期运行验证问题，后续文字通道与耐久验证见 0.2.0 条目。
 
 2026-10-21 将仓库根目录整理为可安装的 `vmware-vnc` skill：新增 SKILL.md、agents/openai.yaml、按需参考资料和 MCP 模板；本机硬编码的 codex-mcp.toml 改为 scripts/Get-McpConfig.ps1 按安装位置生成。README 区分本地 Git 安装、将来 GitHub 安装、技能发现和 MCP 注册。运行源码、Python 包版本与固定运行依赖未改动；未上传仓库，未自动安装技能或修改全局 Codex 配置。
 

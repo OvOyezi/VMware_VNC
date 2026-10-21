@@ -50,7 +50,7 @@ pwsh -NoProfile -File "$skillRoot/scripts/Get-McpConfig.ps1"
 
 ## 安装分发
 
-本仓库根目录就是单个 skill。发布 GitHub 后，向 `$skill-installer` 提供真实的 `OWNER/REPO`，选择 `--path . --name vmware-vnc`。GitHub 仓库名和账号尚未确定时，不编造下载地址，不把上游 VNC-MCP 当成该技能仓库。
+本仓库根目录就是单个 skill。向 `$skill-installer` 提供 [OvOyezi/VMware_VNC](https://github.com/OvOyezi/VMware_VNC)，选择 `--repo OvOyezi/VMware_VNC --path . --name vmware-vnc`，再在实际安装目录运行 Setup。
 
 本地安装可将已提交的 Git 仓库克隆到宿主的技能目录，并将目标文件夹命名为 `vmware-vnc`。当前官方本地发现位置包含 `$HOME/.agents/skills`；本机捆绑的 skill-installer 则默认使用 `$CODEX_HOME/skills`（未设置时为 `$HOME/.codex/skills`）。按实际宿主选择一种位置，避免同名重复安装。依据见 [技能官方文档](https://learn.chatgpt.com/docs/build-skills)及本机 installer 实现。
 

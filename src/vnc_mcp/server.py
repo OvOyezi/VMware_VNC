@@ -63,7 +63,8 @@ mcp = FastMCP(
     lifespan=_lifespan,
     log_level="WARNING",
     instructions=(
-        "Control a remote desktop through VNC. Always call vnc_screenshot after connecting "
+        "Provide VNC screen observation and desktop input for VM tasks that need a visible interface. "
+        "Always call vnc_screenshot after connecting "
         "to inspect the screen. Coordinates always refer to the native desktop; cropped images "
         "include their origin, which must be added to image-local coordinates. "
         "Connect multiple desktops using distinct session_id values. Always pass BOTH session_id "
@@ -74,7 +75,6 @@ mcp = FastMCP(
         "Use vnc_text or vnc_type for literal Unicode text: auto selects negotiated UTF-8 clipboard "
         "or an explicitly selected VMware guest profile. Guest text requires focus_x/focus_y from "
         "the inspected screenshot; the focus click clears any existing text selection. "
-        "Use official vmrun for VMware power, files and guest commands. "
         "A sent paste is not proof that the application accepted text. Never replay failed input automatically. "
         "Use vnc_screenshot(remember=true) before an action when you need a pixel reference, then vnc_wait_for "
         "changed/matches, or stable without a reference. These are sampled visual conditions, not application readiness. "
@@ -85,7 +85,7 @@ mcp = FastMCP(
 
 @mcp.tool()
 async def vnc_connect(host: str = "", port: int = 0, password: str = "", session_id: str = DEFAULT_SESSION, profile: str = "") -> dict:
-    """Connect host AND port (VMware ports start at 5901). Use distinct session_id names for independent desktops. Reconnecting the same name replaces only that session and returns a new connection_id. Names: 1-64 ASCII letters/digits/._-, starting with a letter or digit."""
+    """Connect to an explicit VNC host AND port, or a configured profile. Use distinct session_id names for independent desktops. Reconnecting the same name replaces only that session and returns a new connection_id. Names: 1-64 ASCII letters/digits/._-, starting with a letter or digit."""
     selected = None
     if profile:
         if profile not in PROFILES:
@@ -109,7 +109,7 @@ async def vnc_profiles() -> dict:
 
 @mcp.tool()
 async def vnc_diagnostics() -> dict:
-    """Read-only host, Python, fixed runtime dependency and vmrun discovery information. Does not connect, start a VM, run commands or reveal credentials."""
+    """Read-only VNC runtime and optional guest-clipboard backend discovery. Does not connect, execute guest commands or read credentials."""
     return {**get_diagnostics(), "configured_profiles": len(PROFILES)}
 
 

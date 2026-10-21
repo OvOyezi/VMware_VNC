@@ -1,4 +1,4 @@
-"""Explicit VMware guest profiles and cancellable official vmrun operations."""
+"""Endpoint-bound profiles and optional VMware clipboard preparation for VNC text."""
 from __future__ import annotations
 
 import base64
@@ -97,7 +97,9 @@ def load_profiles(path: str | None = None) -> dict[str, GuestProfile]:
     return profiles
 
 
-class VmrunGuest:
+class VmrunClipboard:
+    """Prepare and verify clipboard text in the profile's bound guest."""
+
     def __init__(self, profile: GuestProfile) -> None:
         self.profile = profile
         discovered = profile.vmrun or get_diagnostics()["vmrun"]["path"]

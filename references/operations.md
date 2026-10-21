@@ -2,17 +2,19 @@
 
 按画面条件等待变化、匹配或稳定时，见 [visual-waits.md](visual-waits.md)。`vnc_screenshot(remember=true)` 返回连接内参考 ID，`vnc_wait_for` 返回最终图和条件结果；普通定时 `vnc_wait` 仍可用。
 
-以下调用省略宿主提供的工具前缀，以当前聊天中 `vmware_vnc` MCP 注册的实际工具为准。按 [SKILL.md](../SKILL.md) 中的目标与范围操作指定虚拟机。
+以下均为本项目的 VNC 接口，调用省略宿主提供的工具前缀，以当前 `vmware_vnc` MCP 注册的实际名称为准。
 
 ## 连接与截图
 
 ```python
-vnc_connect(host="127.0.0.1", port=5901, session_id="WIN11")
+vnc_connect(host="127.0.0.1", port=5901, session_id="desktop-a")
 # 保存返回的 connection_id，替换后面的示例占位值。
-vnc_screenshot(session_id="WIN11", connection_id="<本次返回的 ID>")
+vnc_screenshot(session_id="desktop-a", connection_id="<本次返回的 ID>")
 ```
 
 连接返回目标、原生尺寸和 connection_id。确认截图与指定虚拟机一致后再输入。具名会话名为 1–64 个 ASCII 字母、数字或 `._-`，首字符须为字母或数字。
+
+需要 VNC 认证时，在 MCP 启动环境中提供 `VNC_PASSWORD_ENV` 指定的变量，默认变量名为 `VNC_PASSWORD`；单次 `vnc_connect` 也接受 `password` 参数。通过宿主的凭据机制传递真实值，不在示例、日志或报告中展开。
 
 截图默认 JPEG、质量 80、4:4:4、不缩放；精确像素用 `image_format="png"`。区域使用 `region={"x": 100, "y": 200, "width": 640, "height": 480}`。点击图内 `(20, 30)` 时，应使用原生坐标 `(120, 230)`；优先采用本次截图元数据中的实际原点。
 
@@ -22,9 +24,9 @@ vnc_screenshot(session_id="WIN11", connection_id="<本次返回的 ID>")
 
 | 工具 | 主要参数 / 行为 |
 | --- | --- |
-| vnc_connect | host、port、session_id；或显式 profile 读取已配置端点；重连同名会话会生成新 connection_id |
+| vnc_connect | host、port、session_id、可选 password；或显式 profile 读取已配置端点；重连同名会话会生成新 connection_id |
 | vnc_profiles | 无参数；列出配置端点，不读取凭据 |
-| vnc_diagnostics | 无参数；读取本机运行依赖与 vmrun 发现信息 |
+| vnc_diagnostics | 无参数；读取 VNC 运行依赖及可选来宾剪贴板后端的发现信息 |
 | vnc_status | session_id；等待该会话此前操作后读取实时状态 |
 | vnc_sessions | 无参数；非阻塞缓存清单，不证明端点此刻仍在线 |
 | vnc_screenshot | image_format、quality、region、remember；记住参考时返回 reference_id |
@@ -52,8 +54,8 @@ VNC_ENCODING / CLI `--encoding` 可选 auto、hextile、raw。auto 优先无损 
 ## 多桌面
 
 ```python
-vnc_connect(host="127.0.0.1", port=5902, session_id="WIN10")
-vnc_screenshot(session_id="WIN10", connection_id="<WIN10 本次 ID>")
+vnc_connect(host="127.0.0.1", port=5902, session_id="desktop-b")
+vnc_screenshot(session_id="desktop-b", connection_id="<desktop-b 本次 ID>")
 vnc_sessions()
 ```
 
@@ -77,16 +79,4 @@ $vnc = "$skillRoot/.venv/Scripts/vnc-mcp.exe"
 
 `vnc-mcp doctor` 为只读本机诊断；`vnc-mcp profiles --profiles-file <本机配置>` 列出端点。文字命令支持 `text --text-file <UTF-8 文件> --profile <名称> --profiles-file <文件> --focus X Y`，仍须显式提供 host、port。
 
-## 验收
-
-默认 `scripts/Test.ps1` 只操作人工 RFB 服务，不连接真实虚拟机。
-
-如果用户已明确同意真实端点验收，先提供地址及端口，再运行连接与截图检查，例如：
-
-```powershell
-& "$skillRoot/.venv/Scripts/python.exe" "$skillRoot/checks/vnc_mcp_multisession_live.py" --config '<实际 MCP 配置文件>' --host 127.0.0.1 --targets WIN11=5901 WIN10=5902 --output "$skillRoot/checks/results/project-live.json"
-```
-
-该检查通过本项目的 VNC MCP 连接至少两台目标，配置条目名为 vmware_vnc；只连接、截图和断开，不发送键鼠。不要用示例端口代替用户确认的目标。历史实机通过不能替代本次端点和当前聊天的验证。
-
-需要持续截图与生命周期压力测试时，使用 `checks/vnc_mcp_soak.py`。必须显式传 `--allow-live` 和 `--targets NAME=HOST:PORT`；它不发送键鼠或剪贴板，每 50 轮计划重连单个目标并拒绝旧 ID，任何失败立即停止且不自动恢复。输出为统计 JSON。默认不连接真实端点，`--self-test` 仅连接人工 RFB。
+回归分类和显式实机验收入口见 [检查工具](../checks/README.md)。

@@ -1,30 +1,40 @@
-# 检查工具分类
+# 检查工具
 
-默认入口为仓库根目录的 `scripts/Test.ps1`。下列七个脚本会由它自动执行，使用本机人工 RFB 服务或 mock，不操作真实虚拟机。
+默认入口为仓库根目录的 `scripts/Test.ps1`，使用本机人工 RFB 服务或 mock，不操作真实虚拟机。
 
 | 默认回归 | 验证范围 |
 | --- | --- |
-| vnc_mcp_smoke.py | MCP 初始化、工具、模拟连接、截图及输入协议 |
-| vnc_mcp_regression.py | refresh / fresh 生命周期、状态清理及 CLI 行为 |
-| vnc_mcp_deep_checks.py | 队列、取消、预算、编码、启动竞态与历史对照 |
-| vnc_mcp_multisession.py | 多会话隔离、ID 校验、容量与空闲回收 |
-| vnc_mcp_diagnostics.py | 本机依赖诊断、vmrun 发现与无副作用边界 |
-| vnc_mcp_extensions.py | UTF-8 codec 与 loopback 协商、惰性请求、sync-flush、profile、取消和关闭后的缓冲释放 |
-| vnc_mcp_visual.py | 逐像素/区域条件、参考隔离、MCP 取消、轮询并发、单次最终编码、CLI 和参考文件边界 |
+| vnc_mcp_smoke.py | MCP 初始化、模拟连接、截图像素与输入协议 |
+| vnc_mcp_regression.py | refresh / fresh 生命周期、状态清理及本项目 CLI |
+| vnc_mcp_deep_checks.py | 队列、取消、预算、编码与当前输入完整性 |
+| vnc_mcp_multisession.py | 会话隔离、ID、容量、空闲回收与并发 reactor 启动 |
+| vnc_mcp_diagnostics.py | 运行依赖诊断及可选剪贴板后端发现的只读边界 |
+| vnc_mcp_extensions.py | UTF-8 协商、惰性请求、sync-flush、profile、来宾剪贴板与缓冲释放 |
+| vnc_mcp_visual.py | 逐像素/区域条件、参考隔离、取消、并发、编码及参考文件限制 |
 
-以下工具通过本项目的 VNC MCP 或 CLI 进行实机验收，只在显式指定端点后手动执行，不属于默认回归。目标与任务范围的要求见 [SKILL.md](../SKILL.md)。
+检查直接验证当前实现。输出 JSON、日志和截图保存在 `results/`，不加入 Git。
 
-| 手动工具 | 用途与注意事项 |
+## 显式端点检查
+
+以下工具只在明确指定真实端点后执行，不属于默认回归：
+
+| 工具 | 用途 |
 | --- | --- |
-| vnc_mcp_multisession_live.py | 至少两台目标的连接、截图、重连及隔离验收；不发送键鼠，优先作为具名会话实机验收入口 |
-| vnc_mcp_soak.py | 显式 --allow-live 后持续只读截图与计划重连；--self-test 只访问人工服务 |
-| vnc_mcp_probe.py | 单目标连接与截图；兼容 default 会话的历史探测工具 |
-| vnc_mcp_optimized_probe.py | JPEG / PNG、区域及连续截图比较；使用兼容 default 会话 |
-| vnc_mcp_refresh_diagnose.py | 直接检查帧缓冲更新与首帧完成情况；不发送键鼠 |
-| vnc_mcp_actions.py | 历史手动动作驱动器，会按 JSON 列表发送输入。执行前审阅完整动作，首项必须截图核对；不作为技能常规交互入口，不自动重放失败或取消的列表 |
+| vnc_mcp_multisession_live.py | 通过实际注册 MCP 检查至少两台桌面的连接、截图、重连和会话隔离；不发送键鼠 |
+| vnc_mcp_soak.py | 持续只读截图与计划重连；`--self-test` 只访问人工服务，实机须传 `--allow-live` |
+| vnc_mcp_refresh_diagnose.py | 跟踪 RFB 帧缓冲请求和完成情况；不发送键鼠 |
 
-`fixtures/baselines/` 是深挖回归使用的固定历史样本，不是备用运行后端。`results/` 存放本机生成的 JSON、日志和截图，已排除在 Git 外。私有动作列表与连接资料放 `.local/`，不要加入技能包。
+多会话检查示例，先替换配置和端点：
 
-`fixtures/textbox_windows.ps1` 与 `fixtures/textbox_linux.py` 是手动 Unicode 验收的独立测试窗口，需在明确选择的来宾中运行。它们把测试文本写入指定结果文件，便于通过官方 CLI 独立读回；不会由默认回归或技能安装启动。用临时测试文字，测试后关闭窗口并删除自己的文件。流程见 [兼容性与验收](../docs/COMPATIBILITY.md)。
+```powershell
+& "$skillRoot/.venv/Scripts/python.exe" "$skillRoot/checks/vnc_mcp_multisession_live.py" --config '<实际 MCP 配置文件>' --host '<实际地址>' --targets desktop-a=5901 desktop-b=5902 --output "$skillRoot/checks/results/live.json"
+```
 
-`fixtures/visual_windows.ps1` 是显式实机视觉验收窗口。PowerShell 5.1 / STA 下传入 ControlPath 和 ResultPath；控制 JSON 包含 generation、mode（static/pulse）、red/green/blue。左右两块区域分别变化和保持固定，结果 JSON 给出原生坐标及当前颜色。连接后先截图核对，再用官方 vmrun 更新控制文件、独立核对结果；测试后只关闭自己的窗口并清理自己的目录。
+持续检查显式提供 `--targets NAME=HOST:PORT` 和 `--allow-live`；每 50 轮计划重连一个目标并拒绝旧 ID，出现异常即停止。它不发送键鼠或剪贴板，也不自动恢复失败操作。完整参数可查看脚本 `--help`。
+
+## 测试窗口
+
+- `fixtures/textbox_windows.ps1`、`textbox_linux.py` 提供独立文本窗口，把实际收到的内容写入指定 JSON，供应用级读回比较。只使用临时测试文字。
+- `fixtures/visual_windows.ps1` 提供变化与固定区域。Windows PowerShell 5.1 / STA 下传入 ControlPath、ResultPath，控制文件可指定 generation、mode（static/pulse）和 red/green/blue。
+
+这些窗口不会被安装或默认回归启动。实机先截图核对，具名调用同时携带两个 ID；结束后关闭自己的窗口并清理文件。验收步骤见 [兼容性](../docs/COMPATIBILITY.md)。

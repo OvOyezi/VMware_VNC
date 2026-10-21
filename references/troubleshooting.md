@@ -5,14 +5,14 @@
 | 现象 | 核对与处理 |
 | --- | --- |
 | 当前聊天没有 VNC 工具 | 区分技能已安装、MCP 已登记、进程初始化成功、当前聊天工具已加载。按 setup.md 逐层验证 |
-| 连接拒绝 / 超时 | 用户确认目标后核查 VNC 监听与端口；VMware 可用 vmrun list 只读查看电源。Tools/IP 正常不证明 VNC 可达，也不证明来宾账号可认证 |
+| 连接拒绝 / 超时 | 核对目标地址、端口和 VNC 服务监听。IP 可达不证明 VNC 可用；来宾剪贴板后端的认证另行检查 |
 | VMware refresh 截图超时 | 尝试 fresh；它用独立共享连接获取完整首帧，不是缓存截图，也不保证更少网络流量 |
 | connection_id 失效 | 重连、断线或空闲回收会改变连接。确认目标后显式重连，保存新 ID 并截图；不要自动重放旧输入 |
 | 队列满 / 操作超时 / 取消 | 停止提交后续输入，检查状态与新截图。取消为协作式，不能撤回已发送输入，也不能强行抢占单步网络等待与编码 |
 | 字母被输入法转换 | 先截图确认来宾输入法和焦点。切换到合适输入状态后重新观察；不盲发整段命令 |
 | 中文无法输入或粘贴 | 查看 capabilities；标准 UTF-8 扩展优先，否则显式绑定来宾 profile。按 text-input.md 检查实际登录账号、临时目录权限、显示会话与焦点。不要把 raw Unicode keysyms 当成通用解法 |
 | clipboard_verified=true 但控件没有文字 | 校验只证明剪贴板已准备。检查 focus 坐标、当前窗口、粘贴快捷键与应用是否接受粘贴；不要自动再发同一段 |
-| Linux 报 Tools 未运行，但 checkToolsState 显示 running | 检查发行版是否把 VIX/guest operations 拆成独立软件包；Tools 基础服务与 VIX 能力应分别核对 |
+| Linux 来宾剪贴板后端报告 Tools 不可用 | 检查发行版是否把 guest operations 拆成独立软件包；基础服务运行与来宾辅助通道可用须分别核对 |
 | RFB protocol rejected | 协议或压缩内容验证失败，连接已停用；保留结构化原因，确认服务端与目标后再显式重连。当前版本不协商有已知解码问题的 ZRLE |
 | 点击位置偏移 | 核对本次截图原点、原生桌面尺寸与多屏位置；区域图内坐标要加原点，不用显示预览的缩放尺寸 |
 | 移动技能后无法启动 | 在新目录重新运行 Setup，重新生成 MCP 配置，核对 command/args/cwd。虚拟环境不能直接搬运 |
@@ -21,4 +21,4 @@
 
 默认回归测试：`pwsh -NoProfile -File <skill-root>/scripts/Test.ps1`。它验证模拟协议、UTF-8 扩展、来宾调用边界、生命周期、队列和会话隔离。真实桌面文字与耐久测试单独验收，具体范围见 [兼容性记录](../docs/COMPATIBILITY.md)；不以有限时长测试承诺长期永不出错。
 
-需要追溯上游差异时读 [LOCAL-CHANGES.md](../LOCAL-CHANGES.md)。需要分析历史证据时读 [docs/reports/README.md](../docs/reports/README.md)，其中旧路径和历史结论保留原貌，不能当作当前部署状态。
+实现来源与适配差异见 [LOCAL-CHANGES.md](../LOCAL-CHANGES.md)。

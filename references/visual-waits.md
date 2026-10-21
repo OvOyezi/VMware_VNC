@@ -52,10 +52,8 @@ changed 未给 reference-file 时先记下当前图，再等待后续变化；�
 
 --timeout 是单步 VNC 网络等待，--wait-timeout 是视觉条件预算。条件满足退出 0，未满足退出 3，操作失败退出 1；参数解析错误退出 2。满足和未满足都会保存最后有效图，输出目录须已经存在。连续操作优先 MCP，以保持连接和参考 ID。
 
-## 复用与性能边界
+## 性能边界
 
-复用固定 vncdotool 的连接、RFB 矩形请求和原生画布处理，逐像素差异使用已安装 Pillow 的 ImageChops、L 通道阈值和直方图计数；未引入其他视觉库或升级运行依赖。原依赖 expectScreen 比较颜色直方图，像素位置交换时仍可能匹配；本机用两个互换位置的红/蓝像素复现了该差异。
+比较使用逐像素位置差异，中间帧不编码成 PNG/JPEG，只编码最终返回的图。区域截图发送对应的 RFB 矩形请求，实际服务端可能返回更大区域；已测 VMware 内置 VNC 的 fresh 连接仍返回完整帧，区域采样不能据此保证节省网络流量。
 
-中间帧不编码成 PNG/JPEG，也不逐帧返回给调用方，只编码最终图。区域截图会请求对应的 RFB 矩形，实际服务端可能发送更大的区域；本次 VMware 内置 VNC 的 fresh 连接仍返回完整帧，因此区域比较不能据此宣称节省了它的 RFB 流量。
-
-上游核查：vncdotool 已发布版本为 [v1.4.2](https://github.com/sibson/vncdotool/releases/tag/v1.4.2)，同时阅读了 [main 固定提交 5a98fb8](https://github.com/sibson/vncdotool/tree/5a98fb8fbe2ce7148f310f89c905ddc527e5801c) 的匹配和稳定等待。当前适配保留本项目的 fresh 模式、连接 ID、队列、取消及资源边界。矩形请求依据 [RFB 协议](https://github.com/rfbproto/rfbproto/blob/master/rfbproto.rst)，区域传输思路也核对了 [noVNC #1990](https://github.com/novnc/noVNC/pull/1990)；未合入该未发布补丁或复制其实现。图像运算见 [Pillow ImageChops](https://pillow.readthedocs.io/en/stable/reference/ImageChops.html)。
+编码、服务端兼容范围和实机覆盖见 [兼容性](../docs/COMPATIBILITY.md)。

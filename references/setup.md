@@ -4,9 +4,9 @@
 
 - Windows；维护脚本使用 PowerShell 7（`pwsh`）。
 - Python 3.11+，可以用 `-PythonExecutable` 选择解释器。固定依赖在 Windows / Python 3.15.0 完成过验证，其他 Python 版本须以安装与测试结果为准。
-- 可达的 VNC 服务。VMware 管理操作额外需要官方 vmrun；安装技能不要求启动 VMware。
+- 可达的 VNC 服务。可选的 VMware 来宾剪贴板后端额外需要 vmrun、Tools 和来宾凭据，配置见 [文本输入](text-input.md)。
 
-用本 `SKILL.md` 的实际位置确定 `$skillRoot`。不要从历史文档复制原作者的绝对路径。
+用本 `SKILL.md` 的实际位置确定 `$skillRoot`，脚本和运行环境都从该位置定位。
 
 ```powershell
 $skillRoot = 'C:/path/to/vmware-vnc' # 替换为实际技能目录

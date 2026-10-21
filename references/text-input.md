@@ -26,7 +26,9 @@ focus 坐标来自已检查的截图。普通文本控件默认 ctrl-v；终端�
 
 部分 X11 服务先接收剪贴板所有权通知，等应用粘贴后才请求文字。`clipboard_offered` 表示已提交所有权通知，`clipboard_data_sent` 表示文字数据已写入 VNC 连接；工具不会等待应用确认。`vnc_clipboard_get` 返回最近接收的通知缓存，不能当作来宾的实时查询接口。
 
-## VMware 来宾辅助通道
+## 可选来宾剪贴板后端
+
+此后端通过官方 vmrun 准备并校验目标来宾的剪贴板，随后由 VNC 点击并粘贴。它只服务文本输入。标准 UTF-8 剪贴板通道只依赖 VNC 服务的协商能力。
 
 复制 [profiles.toml.example](../assets/profiles.toml.example) 到 `.local/profiles.toml`，按实际机器填写：
 

@@ -18,7 +18,10 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from PIL import Image
 
-from vnc_mcp_optimized_probe import payload
+
+def payload(result):
+    assert not result.isError, [getattr(item, "text", "") for item in result.content]
+    return result.structuredContent or json.loads(next(item.text for item in result.content if item.type == "text"))
 
 
 async def run(args, report):

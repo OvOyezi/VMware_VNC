@@ -1,14 +1,14 @@
 # VMware VNC 维护约定
 
-- 该目录是 VNC MCP 的唯一维护项目；本次迁移不保留旧副本或迁移备份。
-- 默认使用 PowerShell 7。环境用 `scripts/Setup.ps1` 重建，不复制 `.venv`。
-- 结构性代码查询使用已安装的 codebase-memory 技能；先核对索引根目录和覆盖情况。
-- 核心运行代码位于 `src/vnc_mcp`，`main.py` 是本地入口。不要把业务逻辑放入启动脚本。
-- 仓库根目录即 `vmware-vnc` 技能；`SKILL.md` 保留核心工作流，按需细节放 `references/`，界面元数据放 `agents/openai.yaml`。源码只维护一份，不另建重复技能副本。
-- 安装和运行不得依赖本机绝对路径；MCP 片段由 `scripts/Get-McpConfig.ps1` 按安装位置生成。技能安装不自动修改用户的 Codex 配置。
-- 修改后运行 `scripts/Test.ps1`。默认测试只接触本机模拟 RFB 服务，不操作真实虚拟机。
-- 实机测试必须显式提供目标地址及端口，连接后先截图核对；具名操作同时携带 session_id、connection_id。不要自动重放失败或取消的输入。
-- VMware 电源等操作默认使用官方 vmrun；截图和键鼠通过本项目的 VNC MCP 或 CLI，只操作明确选定的 VNC 端点。
-- 依赖固定在 `requirements.lock.txt`；升级需单独说明并重新验证。上游来源和本地差异见 `LOCAL-CHANGES.md`。
-- `.local/`、`checks/results/`、`.venv/` 为本机资料，不加入 Git；不要提交真实密码、全局 Codex 配置、截图或访问凭据。
-- 历史报告保留原始路径和结论。新结论须有新证据，区分模拟协议、真实端点和当前聊天加载状态。
+- 项目提供 VNC 画面观察、桌面输入、文本和画面条件等待。技能、界面简介及 MCP 提示须与这些实际能力一致；文档只说明本项目接口与必要依赖。
+- 运行代码集中在 `src/vnc_mcp/`，`main.py` 是本地入口；业务逻辑不放入环境准备和启动脚本。
+- 仓库根目录就是 `vmware-vnc` 技能。核心流程放 `SKILL.md`，按需细节放 `references/`，界面元数据放 `agents/openai.yaml`。只维护这一份源码。
+- 使用 PowerShell 7 和 `scripts/Setup.ps1` 创建环境，不复制 `.venv`。运行与安装不得依赖维护者机器的绝对路径。
+- MCP 片段由 `scripts/Get-McpConfig.ps1` 按安装位置生成；安装和配置生成不自动修改用户的 Codex 配置。
+- 结构查询使用已安装的 codebase-memory 技能，核对索引根目录、时效及覆盖；缺口使用对应源码核实。
+- 修改后运行 `scripts/Test.ps1`。默认检查只接触本机人工 RFB 服务；实机验收显式指定端点，连接后先截图核对，具名动作同时携带 `session_id`、`connection_id`。
+- 失败或取消的输入不自动重放。测试结束后清理自己创建的连接、窗口和临时文件。
+- 来宾剪贴板后端仅服务文本输入，保持端点绑定、凭据隔离、结果校验及临时文件清理。
+- 依赖固定在 `requirements.lock.txt`；升级需说明原因并重新验证。上游来源和实现差异见 `LOCAL-CHANGES.md`，保留必要许可证与版权声明。
+- `.local/`、`checks/results/`、`.venv/` 为本机资料，不加入 Git；不提交真实凭据、全局配置或截图。
+- 文档维护当前能力、限制和可复现检查；过时部署日志、重复报告和旧源码副本及时清理。区分模拟检查、实机结果和当前进程加载状态。

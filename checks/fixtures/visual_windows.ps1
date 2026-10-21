@@ -1,4 +1,4 @@
-# Windows guest test fixture; launch explicitly through official vmrun, never by Setup/Test.
+# Windows guest test fixture; launch explicitly in the selected guest, never by Setup/Test.
 param([Parameter(Mandatory)][string]$ControlPath, [Parameter(Mandatory)][string]$ResultPath)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms

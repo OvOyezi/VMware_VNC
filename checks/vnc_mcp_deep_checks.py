@@ -7,7 +7,6 @@ import base64
 from contextlib import redirect_stderr
 from datetime import datetime, timezone
 from io import BytesIO, StringIO
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -239,29 +238,23 @@ def backend_checks(args, report, a, b):
     checks["actual_action_deadline_stops_partial_input"] = True
     two.disconnect()
 
-    previous = Path(__file__).resolve().parent / "fixtures/baselines/typing-unbatched.py"
-    spec = importlib.util.spec_from_file_location("previous_vnc_client", previous)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    measurements = {}
-    for label, cls in (("before", module.VNCSession), ("after", VNCSession)):
-        candidate = cls(.5, "fresh")
-        candidate.connect("127.0.0.1", a.port)
-        durations = []
-        for _ in range(5):
-            count = keys(a, 100)
-            tick = time.monotonic()
-            candidate.type_text("d" * 2000)
-            deadline = time.monotonic() + 2
-            while keys(a, 100) < count + 2000:
-                assert time.monotonic() < deadline
-                time.sleep(.001)
-            durations.append(time.monotonic() - tick)
-        measurements[label] = round(statistics.median(durations), 4)
-        candidate.disconnect()
-    metrics["typing_2000_wire_complete_median_seconds"] = measurements
-    metrics["typing_speedup"] = round(measurements["before"] / measurements["after"], 2)
-    checks["batched_typing_preserves_all_wire_events"] = True
+    candidate = VNCSession(.5, "fresh")
+    candidate.connect("127.0.0.1", a.port)
+    durations = []
+    for _ in range(5):
+        count = keys(a, 100)
+        tick = time.monotonic()
+        candidate.type_text("d" * 2000)
+        deadline = time.monotonic() + 2
+        while keys(a, 100) < count + 2000:
+            assert time.monotonic() < deadline
+            time.sleep(.001)
+        received = keys(a, 100) - count
+        assert received == 2000
+        durations.append(time.monotonic() - tick)
+    candidate.disconnect()
+    metrics["typing_2000_wire_complete_median_seconds"] = round(statistics.median(durations), 4)
+    checks["current_client_delivers_five_complete_2000_character_transfers"] = True
 
 
 def main():

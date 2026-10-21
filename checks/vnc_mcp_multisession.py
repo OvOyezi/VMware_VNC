@@ -7,7 +7,6 @@ import base64
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, redirect_stderr
 from datetime import datetime, timezone
-import importlib.util
 from io import BytesIO, StringIO
 import json
 import os
@@ -31,13 +30,6 @@ def startup_child(args):
     from twisted.internet import reactor
     from vncdotool import api
     from vnc_mcp.client import VNCSession
-
-    if args.baseline:
-        path = Path(__file__).resolve().parent / "fixtures/baselines/reactor-unlocked.py"
-        spec = importlib.util.spec_from_file_location("vnc_mcp.startup_baseline", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        VNCSession = module.VNCSession
 
     original_run = reactor.run
     gate, barrier = threading.Event(), threading.Barrier(2)
@@ -66,10 +58,7 @@ def startup_child(args):
         result = {"reactor_threads_started": len(launches), "reactor_errors": errors,
                   "both_connected": all(state["connected"] for state in states)}
         assert result["both_connected"]
-        if args.baseline:
-            assert len(launches) == 2 and errors == ["ReactorAlreadyRunning"], result
-        else:
-            assert len(launches) == 1 and not errors, result
+        assert len(launches) == 1 and not errors, result
         print(json.dumps(result))
     finally:
         gate.set()
@@ -406,7 +395,6 @@ def main():
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--startup-child", type=int, nargs=2)
-    parser.add_argument("--baseline", action="store_true")
     args = parser.parse_args()
     args.source = args.source.resolve()
     if args.startup_child:
@@ -419,15 +407,12 @@ def main():
     fixtures = [Fixture("alpha desktop", 33), Fixture("beta desktop", 177),
                 Fixture("legacy desktop", 84), Fixture("auth desktop", 244, password="test1234")]
     try:
-        for baseline in (True, False):
-            command = [sys.executable, str(Path(__file__).resolve()), "--source", str(args.source),
-                       "--startup-child", str(fixtures[0].port), str(fixtures[1].port)]
-            if baseline:
-                command.append("--baseline")
-            result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", timeout=12)
-            assert result.returncode == 0, (result.stdout, result.stderr)
-            report["metrics"]["reactor_startup_before" if baseline else "reactor_startup_after"] = json.loads(result.stdout)
-        report["checks"]["concurrent_reactor_start_race_reproduced_and_fixed"] = True
+        command = [sys.executable, str(Path(__file__).resolve()), "--source", str(args.source),
+                   "--startup-child", str(fixtures[0].port), str(fixtures[1].port)]
+        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", timeout=12)
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        report["metrics"]["concurrent_reactor_startup"] = json.loads(result.stdout)
+        report["checks"]["concurrent_connections_share_one_reactor_without_errors"] = True
         asyncio.run(main_checks(args, report, fixtures))
         errors = [error for fixture in fixtures for error in fixture.errors]
         assert not errors, errors

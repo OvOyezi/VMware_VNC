@@ -150,7 +150,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("mcp", help="run the MCP stdio server")
-    sub.add_parser("doctor", help="read-only local runtime and vmrun discovery report")
+    sub.add_parser("doctor", help="read-only VNC runtime and optional clipboard-backend discovery")
     profiles = sub.add_parser("profiles", help="list configured endpoints without reading credentials")
     profiles.add_argument("--profiles-file")
     for name in ("connect", "status"):

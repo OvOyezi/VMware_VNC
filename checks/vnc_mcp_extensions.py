@@ -708,7 +708,7 @@ class ExtensionChecks(unittest.TestCase):
                 _guest.subprocess, "Popen"
             ) as popen:
                 with self.assertRaises(ValueError):
-                    _guest.VmrunGuest(profile)
+                    _guest.VmrunClipboard(profile)
             popen.assert_not_called()
 
     def test_explicit_invalid_vmrun_does_not_fallback_or_invoke(self):
@@ -726,7 +726,7 @@ class ExtensionChecks(unittest.TestCase):
             _guest, "get_diagnostics"
         ) as diagnostics, mock.patch.object(_guest.subprocess, "Popen") as popen:
             with self.assertRaises(ValueError):
-                _guest.VmrunGuest(profile)
+                _guest.VmrunClipboard(profile)
         diagnostics.assert_not_called()
         popen.assert_not_called()
 
@@ -762,7 +762,7 @@ class ExtensionChecks(unittest.TestCase):
             with mock.patch.dict(_guest.os.environ, credentials, clear=True), mock.patch.object(
                 _guest.subprocess, "Popen", return_value=fake_process
             ) as popen:
-                vmrun = _guest.VmrunGuest(profile)
+                vmrun = _guest.VmrunClipboard(profile)
                 with self.assertRaises(RuntimeError) as caught:
                     vmrun._invoke(
                         "runProgramInGuest",
@@ -799,7 +799,7 @@ class ExtensionChecks(unittest.TestCase):
             with mock.patch.dict(_guest.os.environ, credentials, clear=True), mock.patch.object(
                 _guest.subprocess, "Popen", return_value=fake_process
             ):
-                vmrun = _guest.VmrunGuest(profile)
+                vmrun = _guest.VmrunClipboard(profile)
                 with self.assertRaises(RuntimeError) as caught:
                     vmrun._invoke(
                         "runProgramInGuest",
@@ -835,7 +835,7 @@ class ExtensionChecks(unittest.TestCase):
             with mock.patch.dict(_guest.os.environ, credentials, clear=True), mock.patch.object(
                 _guest.subprocess, "Popen", return_value=fake_process
             ) as popen:
-                vmrun = _guest.VmrunGuest(profile)
+                vmrun = _guest.VmrunClipboard(profile)
                 with self.assertRaises(_operations.ActionCancelled):
                     vmrun._invoke("runProgramInGuest", "synthetic-argument", control=control)
 
@@ -973,7 +973,7 @@ class ExtensionChecks(unittest.TestCase):
         )
         fake_guest = mock.Mock()
         fake_guest.prepare_clipboard.side_effect = RuntimeError("synthetic guest failure")
-        with mock.patch.object(_client, "VmrunGuest", return_value=fake_guest), mock.patch.object(
+        with mock.patch.object(_client, "VmrunClipboard", return_value=fake_guest), mock.patch.object(
             session, "_check_point"
         ) as check_point, mock.patch.object(session, "click") as click, mock.patch.object(
             session, "keypress"
@@ -999,7 +999,7 @@ class ExtensionChecks(unittest.TestCase):
             username_env="VNC_TEST_GUEST_USER",
             password_env="VNC_TEST_GUEST_PASSWORD",
         )
-        with mock.patch.object(_client, "VmrunGuest") as vmrun_guest, mock.patch.object(
+        with mock.patch.object(_client, "VmrunClipboard") as vmrun_guest, mock.patch.object(
             session, "click"
         ) as click, mock.patch.object(session, "keypress") as keypress:
             with self.assertRaises(ValueError):
@@ -1036,7 +1036,7 @@ class ExtensionChecks(unittest.TestCase):
             control.check()
 
         try:
-            with mock.patch.object(_client, "VmrunGuest", return_value=fake_guest), mock.patch.object(
+            with mock.patch.object(_client, "VmrunClipboard", return_value=fake_guest), mock.patch.object(
                 session, "_check_point"
             ), mock.patch.object(session, "click", side_effect=lambda *args: calls.append(("click", *args))), mock.patch.object(
                 session, "keypress"

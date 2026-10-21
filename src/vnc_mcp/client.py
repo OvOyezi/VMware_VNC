@@ -19,7 +19,7 @@ from twisted.internet.defer import Deferred
 from .imaging import Screenshot, validate_encoding, validate_region
 from .operations import ActionCancelled, ActionControl, ActionTimedOut
 from .clipboard import ExtendedClipboard, MAX_CLIPBOARD_BYTES, validate_text
-from .guest import GuestProfile, VmrunGuest
+from .guest import GuestProfile, VmrunClipboard
 from .visual import VisualFrame, VisualReference, reference_from_file
 
 
@@ -381,7 +381,7 @@ class VNCSession:
             return self._capture_frame(region).crop(region).require_bounded()
 
     def remember_visual(self, region: tuple[int, int, int, int] | None = None) -> str:
-        """CLI baseline without an image encoding that will never be returned."""
+        """Remember a visual reference without encoding an unused image."""
         with self._lock:
             frame = self.visual_sample(region)
             reference_id = uuid4().hex
@@ -660,7 +660,7 @@ class VNCSession:
                 # never guess a window or paste into an unknown foreground app.
                 if focus_x is None:
                     raise ValueError("guest text requires focus_x and focus_y from the inspected screenshot to restore the intended input control")
-                result.update(VmrunGuest(profile).prepare_clipboard(text, control))
+                result.update(VmrunClipboard(profile).prepare_clipboard(text, control))
             else:
                 # Unicode failure is detected before sending any clipboard bytes.
                 result.update(self.clipboard_set(text))

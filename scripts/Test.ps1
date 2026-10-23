@@ -34,12 +34,25 @@ $count = 0
 foreach ($check in $checks) {
     $outputPath = Join-Path $resultsPath ("project-{0}.json" -f $check.Name)
     $scriptPath = Join-Path $projectRoot ("checks/{0}" -f $check.Script)
-    & $environmentPython $scriptPath --source $projectRoot --output $outputPath `
-        1> (Join-Path $resultsPath ("project-{0}.runner.stdout.log" -f $check.Name)) `
-        2> (Join-Path $resultsPath ("project-{0}.runner.stderr.log" -f $check.Name))
-    if ($LASTEXITCODE -ne 0) { throw ("{0} failed; inspect {1}" -f $check.Name, $outputPath) }
-    $report = Get-Content -LiteralPath $outputPath -Raw -Encoding utf8 | ConvertFrom-Json
-    if (-not $report.success) { throw ("{0} reported failure" -f $check.Name) }
+    $stdoutPath = Join-Path $resultsPath ("project-{0}.runner.stdout.log" -f $check.Name)
+    $stderrPath = Join-Path $resultsPath ("project-{0}.runner.stderr.log" -f $check.Name)
+    try {
+        & $environmentPython $scriptPath --source $projectRoot --output $outputPath `
+            1> $stdoutPath 2> $stderrPath
+        if ($LASTEXITCODE -ne 0) { throw ("{0} failed; inspect {1}" -f $check.Name, $outputPath) }
+        $report = Get-Content -LiteralPath $outputPath -Raw -Encoding utf8 | ConvertFrom-Json
+        if (-not $report.success) { throw ("{0} reported failure" -f $check.Name) }
+    } catch {
+        $diagnosticPaths = @($outputPath, $stderrPath)
+        if (-not (Test-Path -LiteralPath $outputPath)) { $diagnosticPaths += $stdoutPath }
+        foreach ($diagnosticPath in $diagnosticPaths) {
+            if (Test-Path -LiteralPath $diagnosticPath) {
+                Write-Output ("Failure details: {0}" -f $diagnosticPath)
+                Get-Content -LiteralPath $diagnosticPath -Tail 120
+            }
+        }
+        throw
+    }
     $passed = if ($check.Name -eq 'lifecycle') {
         @($report.refresh.PSObject.Properties).Count + @($report.fresh.PSObject.Properties).Count
     } else { @($report.checks.PSObject.Properties).Count }

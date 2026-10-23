@@ -3,18 +3,18 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "vnc-mcp"
-version = "0.4.0"
-description = "VNC screen observation and desktop input tools for virtual machines"
+name = "vmware-vnc"
+version = "0.5.0"
+description = "MCP tools and an auxiliary CLI for reliable AI visual control of VMware virtual machines"
 readme = "README.md"
 requires-python = ">=3.11"
-authors = [{ name = "Shinko" }]
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 dependencies = [
   "mcp==1.30.0",
   "pillow==13.0.0",
   "cryptography==50.0.2",
+  "websockets==17.3",
 ]
 
 [project.urls]
@@ -23,7 +23,7 @@ Issues = "https://github.com/OvOyezi/VMware_VNC/issues"
 Changelog = "https://github.com/OvOyezi/VMware_VNC/blob/main/CHANGELOG.md"
 
 [project.scripts]
-vnc-mcp = "vnc_mcp.cli:main"
+vmware-vnc = "vmware_vnc.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -32,4 +32,4 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-vnc_mcp = ["resources/*.ps1", "resources/*.py"]
+vmware_vnc = ["resources/*.ps1", "resources/*.py"]

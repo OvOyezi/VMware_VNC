@@ -1,9 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# Modified and maintained for VMware VNC; historical attribution is in NOTICE.
 from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from vnc_mcp.cli import main
+from vmware_vnc.cli import main
 
 if __name__ == "__main__":
     raise SystemExit(main())

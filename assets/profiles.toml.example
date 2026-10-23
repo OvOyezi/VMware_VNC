@@ -24,5 +24,7 @@ vm_password_env = "VM_WINDOWS_ENCRYPTION_PASSWORD"
 # guest_temp_dir = "/home/guest/.cache"
 # username_env = "VM_LINUX_USER"
 # password_env = "VM_LINUX_PASSWORD"
+# clipboard_backend = "auto" # auto, x11 or wayland; auto prefers X11 when configured
 # display = ":0"
 # xauthority = "/home/guest/.Xauthority"
+# wayland_display = "wayland-0" # optional socket name inside the guest's owned XDG_RUNTIME_DIR

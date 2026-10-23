@@ -1,14 +1,16 @@
 ---
 name: vmware-vnc
-description: Observe and interact with virtual-machine desktops through VNC when a task needs the visible interface. Use for screenshots, mouse and keyboard actions, Unicode text, visual condition waits and independent desktop sessions.
+description: Help AI assistants reliably observe and control VMware virtual machines through VNC. Use for screenshots, mouse and keyboard actions, text input, display recovery, visual condition waits and independent console sessions.
 license: Apache-2.0
 ---
 
 # VMware VNC
 
-提供 VNC 画面观察与桌面交互能力，补充常规命令行工作方式无法完成或无法可靠核对的界面环节。来宾可以是 Windows、Linux 或其他提供 VNC 桌面的系统。
+让 AI 通过 VNC 可靠地观察并操作虚拟机，再核对界面结果。当前主要面向 VMware；基础截图、键鼠和画面条件不要求特定来宾 OS、来宾账号、Tools 或外部 CLI，但需要可达的 VNC 端点、相应认证和有效画面。其他服务端的正式支持待定，范围见 [兼容性](docs/COMPATIBILITY.md)。
 
-本文件所在目录就是技能根目录。MCP 和随包的 `vnc-mcp` CLI 提供 VNC 能力；连续交互使用 MCP 可保留连接、会话和画面参考。0.4.0 的 RFB 握手、连接状态与无损矩形解码由本项目的 asyncio 实现负责。
+MCP 是 AI 连续交互的主要入口，可保留连接、会话和画面参考，不绑定特定 AI 宿主。随包的 `vmware-vnc` CLI 作为持续维护的辅助入口，提供单次操作、诊断和脚本集成；两者复用同一套核心能力。任务也可按需结合 `vmrun` 或其他工具，基础 VNC 接管独立可用。
+
+本文件所在目录也可作为 `vmware-vnc` 技能分发；使用 MCP 或 CLI 本身不要求安装 Codex skill。
 
 ## 准备
 
@@ -18,7 +20,7 @@ license: Apache-2.0
 
 ## 调用顺序
 
-1. 使用明确的 `host`、`port` 和 `session_id` 连接，或显式选择已配置的 `profile`；保存返回的 `connection_id`。
+1. 使用明确的 `host`、`port` 和 `session_id` 连接，或显式选择已配置的 `profile`，也可单独使用 `url` 选择原生／TLS／WebSocket 端点；保存返回的 `connection_id`。
 2. 立即截图，核对实际画面、窗口和原生尺寸后再输入。默认截图为原生尺寸 RGB PNG；只有需要更小的有损文件时才选 JPEG。RGB8 描述 VNC 服务端帧缓冲，不表示显示器 HDR 或校准色彩。
 3. 具名会话的截图、输入、等待和断开同时传入 `session_id`、本次 `connection_id`。不同桌面使用不同会话名。
 4. 根据新画面执行动作，再观察结果。区域截图内的坐标须加上截图原点，鼠标接口始终接收桌面原生坐标。
@@ -28,8 +30,8 @@ license: Apache-2.0
 
 ## 文本与画面条件
 
-- 中文、多行文字和表情使用 `vnc_text` 或默认的 `vnc_type`。按 [文本输入](references/text-input.md)检查协商能力；可选来宾剪贴板后端的配置也在该文档。
-- 任务限定纯 VNC 时，显式选择 `method="keys"`，或已协商的 VNC 剪贴板通道。逐键输入受来宾输入法影响；先核对目标应用中的输入模式，中文可通过已配置的来宾输入法输入拼音并选择候选词。
+- `vnc_text`、`vnc_type` 与 CLI `text` / `type` 的 `auto` 只选已协商的 UTF-8 剪贴板或明确绑定的来宾 profile。两者都没有时，任何非空文本都在点击焦点和发送输入前拒绝；需要键盘事件时，先从截图确认目标控件和输入法，再显式选 `method="keys"`。逐键结果带 `input_method_sensitive=true`，`application_verified` 仍为 `false`；输入可能被输入法转换，必须截图核对应用结果。`delay_ms` 仅与显式 `method="keys"` 同用。
+- Linux 来宾 profile 可选择 X11 或 Wayland 剪贴板后端。Wayland 只在 socket 明确且归属当前账号时使用；GNOME 原生 Wayland 的焦点限制尚未实测解决，显式使用 Xwayland 与现有 X11 剪贴板工具是兼容路径。配置见 [文本输入](references/text-input.md)。
 - 来宾辅助输入需要本次截图确认的 `focus_x/focus_y`。准备剪贴板后的点击会取消旧选区，替换内容前先明确清空。
 - 等待变化或匹配前，用 `vnc_screenshot(remember=true)` 保存参考；stable 使用自己的起始画面。参考生命周期、区域和容差见 [画面条件](references/visual-waits.md)。
 - 需要精确读像素、检查微小变化或放大局部时调用 `vnc_inspect`。它返回未放大的原色 PNG、精确 RGB 与可选细节图；放大差异图会改变颜色，不能当作原始桌面像素。
@@ -38,6 +40,6 @@ license: Apache-2.0
 
 ## 异常与维护
 
-失败、超时或取消的输入不自动重放；先检查当前画面与连接状态。截图的 `auto` 模式会先在已有连接上尝试一次有界完整刷新，失败后用短暂共享连接取完整首帧；需要指定行为时仍可选 `refresh` 或 `fresh`。保持的按键、鼠标按钮及会话资源由断开清理。连接、刷新、输入和队列问题见 [故障排查](references/troubleshooting.md)。
+失败、超时或取消的输入不自动重放；先检查当前画面与连接状态。若连接返回 `display_state="unavailable"`（例如 0×0 帧缓冲），显式调用 `vnc_wake(session_id, connection_id)` 或 CLI `wake`，再截图并检查新画面。wake 只发送两次指针移动，不点击、不按键、不解锁；`wake_sent` 只表示动作已发送，不能证明显示已恢复。0×0 resize 会使当前可用画面失效，截图不会返回旧图；普通非零 resize 的旧快照仍保留原尺寸，直到新画面完整。截图的 `auto` 模式会先在已有连接上尝试一次有界完整刷新，失败后用短暂共享连接取完整首帧；需要指定行为时仍可选 `refresh` 或 `fresh`。保持的按键、鼠标按钮及会话资源由断开清理。组合键必须完整释放，分辨率变化后重新截图并确认坐标。连接、刷新、输入和队列问题见 [故障排查](references/troubleshooting.md)。
 
 修改后运行 `scripts/Test.ps1`；默认检查只连接本机人工 RFB 服务。兼容范围及实机验收方法见 [兼容性](docs/COMPATIBILITY.md)，维护要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。

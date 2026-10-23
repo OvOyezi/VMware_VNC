@@ -58,8 +58,8 @@ stable 只证明采样到的图像在观察窗口内满足容差。两次采样�
 CLI 每次创建独立连接，使用相同的比较与等待逻辑：
 
 ```powershell
-& "$skillRoot/.venv/Scripts/vnc-mcp.exe" wait-for --host 127.0.0.1 --port 5901 --screenshot-mode fresh --condition stable --region 100 180 300 200 --wait-timeout 10 --stable-for 0.5 --output 'C:/path/to/final.png'
-& "$skillRoot/.venv/Scripts/vnc-mcp.exe" wait-for --host 127.0.0.1 --port 5901 --screenshot-mode fresh --condition matches --reference-file 'C:/path/to/reference.png' --wait-timeout 10 --output 'C:/path/to/final.png'
+& "$skillRoot/.venv/Scripts/vmware-vnc.exe" wait-for --host 127.0.0.1 --port 5901 --screenshot-mode fresh --condition stable --region 100 180 300 200 --wait-timeout 10 --stable-for 0.5 --output 'C:/path/to/final.png'
+& "$skillRoot/.venv/Scripts/vmware-vnc.exe" wait-for --host 127.0.0.1 --port 5901 --screenshot-mode fresh --condition matches --reference-file 'C:/path/to/reference.png' --wait-timeout 10 --output 'C:/path/to/final.png'
 ```
 
 changed 未给 reference-file 时先记下当前图，再等待后续变化；要与之前保存的画面比较，应显式提供 reference-file。PNG 适合精确比较，JPEG 需要按压缩差异设置容差。参考文件仅接受 PNG / JPEG，至多 20 MiB、16,777,216 像素，尺寸须与选择的桌面区域一致。

@@ -27,5 +27,5 @@ if ($LASTEXITCODE -ne 0) { throw 'Editable project installation failed' }
 & $environmentPython -m pip check
 if ($LASTEXITCODE -ne 0) { throw 'Dependency verification failed' }
 
-& $environmentPython -c 'import sys,vnc_mcp; print("Python:",sys.executable); print("Source:",vnc_mcp.__file__)'
+& $environmentPython -c 'import sys,vmware_vnc; print("Python:",sys.executable); print("Source:",vmware_vnc.__file__)'
 if ($LASTEXITCODE -ne 0) { throw 'Project import failed' }

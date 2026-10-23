@@ -1,8 +1,8 @@
-# Generated for this skill installation. Select the target explicitly when connecting.
+# Generated for this installation. Select the target explicitly when connecting.
 [mcp_servers.vmware_vnc]
 command = {{PYTHON_COMMAND}}
 args = [{{ENTRY_POINT}}, "mcp"]
-cwd = {{SKILL_ROOT}}
+cwd = {{PROJECT_ROOT}}
 
 [mcp_servers.vmware_vnc.env]
 VNC_TIMEOUT = "5"

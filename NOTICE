@@ -1,3 +1,14 @@
+VMware VNC
+
+This project is independently developed and maintained. Modified behavior and
+project versions are described in CHANGELOG.md.
+
+The following notice is retained for portions derived from Apache-2.0-licensed
+source. It identifies historical attribution, not a runtime dependency or the
+current maintainer of this project.
+
+--- Original attribution ---
+
 VNC MCP
 Copyright 2026 Shinko
 

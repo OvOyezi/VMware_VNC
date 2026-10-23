@@ -6,12 +6,13 @@
 - Python 3.11+，可以用 `-PythonExecutable` 选择解释器；实际环境以安装与检查结果为准。
 - 可达的 VNC 端点及相应认证。基础画面与键鼠不要求特定来宾 OS、系统账号、Tools 或外部 CLI。可选 VMware 来宾剪贴板后端另需 `vmrun`、Tools 和来宾凭据，见 [文本输入](text-input.md)。
 
+使用 VMware 自带 VNC 时，连接地址是 VMware 宿主机地址，端口以该虚拟机的 VNC 配置为准。本机可使用 `127.0.0.1`；同一宿主机的每台虚拟机使用不同端口。VNC 密码与来宾系统的登录密码分别配置。
+
 将仓库克隆到选定目录，或安装可选 skill 后，以实际项目根目录确定 `$projectRoot`。MCP 与 CLI 均可直接使用，不要求安装 Codex。
 
 ```powershell
 $projectRoot = 'C:/path/to/vmware-vnc' # 替换为实际安装目录
 pwsh -NoProfile -File "$projectRoot/scripts/Setup.ps1"
-pwsh -NoProfile -File "$projectRoot/scripts/Test.ps1"
 & "$projectRoot/.venv/Scripts/vmware-vnc.exe" --help
 ```
 
@@ -36,7 +37,7 @@ Setup 在该目录创建或复用 `.venv`，按固定依赖安装，再以 edita
 
 也可运行 `pwsh -NoProfile -File "$projectRoot/scripts/Get-McpConfig.ps1" -Format StdioJson` 生成上述通用进程描述。生成结果不含凭据，也不会写入宿主配置。
 
-这是 stdio 服务，不是 HTTP 地址。不同宿主的配置文件格式和重载方式各异，上表描述进程参数，不代表统一的配置文件结构。宿主需要支持 MCP stdio、工具调用和图片结果；逐一验证初始化、工具发现、图片接收和连续会话。当前合成检查使用标准 MCP Python 客户端，不代表已验收所有 AI 产品。
+服务通过 stdio 与宿主通信。不同宿主的配置文件格式和重载方式各异，请按对应的 MCP 配置方式填写进程参数。宿主需要支持工具调用和图片结果。
 
 保存宿主配置后重新加载服务，核对当前聊天实际可用的工具；`vnc_diagnostics` 可检查运行版本。磁盘文件或静态配置已更新，不表示旧进程已重载。安装 skill 本身也不会自动注册 MCP。
 
@@ -50,7 +51,7 @@ pwsh -NoProfile -File "$projectRoot/scripts/Get-McpConfig.ps1"
 
 默认模式只向标准输出生成 TOML；`-Format StdioJson` 输出通用进程 JSON。command、args、cwd 均根据实际安装位置生成，不含默认目标或密码。模板在 `assets/codex-mcp.toml.template`；其他 MCP 宿主使用上节的进程参数，无需使用该模板。
 
-用户要求接入 Codex 时，将输出合并到其选定的配置文件，只更新 `[mcp_servers.vmware_vnc]` 及其 env 表，保留其他配置。已有同名条目时先核对来源。安装和生成片段本身不修改任何用户配置，也不表示服务已加载。
+将输出合并到 Codex 的 MCP 配置文件，对应条目为 `[mcp_servers.vmware_vnc]` 及其 env 表。保存后重新加载 MCP 服务。配置生成脚本只输出片段，不自动写入配置文件。
 
 需要 Codex skill 时，可让 `$skill-installer` 安装本仓库根目录：
 

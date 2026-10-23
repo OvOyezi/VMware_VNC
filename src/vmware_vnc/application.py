@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Modified and maintained for VMware VNC; historical attribution is in NOTICE.
+# Modified for VMware VNC.
 """Instance-owned VNC application; adapters share routing and lifecycle rules."""
 from __future__ import annotations
 

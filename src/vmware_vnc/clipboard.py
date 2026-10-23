@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Modified and maintained for VMware VNC; historical attribution is in NOTICE.
+# Modified for VMware VNC.
 """Bounded UTF-8 text support for the RFB Extended Clipboard extension.
 
 Wire format: https://github.com/rfbproto/rfbproto/blob/master/rfbproto.rst

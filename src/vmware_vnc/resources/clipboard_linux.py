@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Modified and maintained for VMware VNC; historical attribution is in NOTICE.
+# Modified for VMware VNC.
 """One-shot guest helper using an existing X11 or Wayland clipboard utility."""
 import hashlib
 import json

@@ -25,7 +25,7 @@ vnc_type(text="已确认模式下的按键", method="keys", delay_ms=40,
 
 键盘事件至少间隔 20 毫秒；`vnc_type` 或 CLI `type` 的 `delay_ms` 只能与显式 `method="keys"` 一起使用。`method="auto"` 加 `delay_ms` 会在输入前拒绝，即使剪贴板通道可用。超出动作预算的键盘文字也会在点击焦点或发送按键前拒绝；按应用状态分段提交并逐段检查。
 
-按版本记录的历史应用输入见 [兼容性](../docs/COMPATIBILITY.md)。旧版 `auto` 曾可能回退按键，因此旧记录不能证明当前自动通道行为；当前键盘路径须显式指定 `method="keys"`。
+使用逐键输入时始终显式指定 `method="keys"`。通道要求见 [支持范围](../docs/COMPATIBILITY.md)。
 
 ## 标准 VNC 剪贴板
 
@@ -53,7 +53,7 @@ clipboard_backend = "auto" # auto、x11 或 wayland
 
 `auto` 在显式设置 `display` 时固定使用 X11，并要求该会话可用且安装 xclip/xsel；没有 profile display 时，若继承的 X11 display 和工具可用则优先 X11，否则才尝试当前账号拥有的唯一 Wayland socket。Wayland socket 可通过 `wayland_display` 明确指定，也可在只有一个候选时自动选择；多个候选时拒绝猜测。显式 `clipboard_backend="wayland"` 不能与 `display` 同用；`wayland_display` 不能与显式 `clipboard_backend="x11"` 同用。X11 目标或 Wayland socket 一旦选定，准备失败不会切换后端重试，也不会重新发送文字。
 
-Wayland 调用 `wl-copy` 与 `wl-paste` 时显式使用相同的 `text/plain;charset=utf-8` MIME 类型。超时或失败会回收本次调用创建的子进程组，诊断仅返回固定原因标签。上游 [wl-clipboard BUGS](https://github.com/bugaevc/wl-clipboard/blob/master/data/wl-clipboard.1) 记录了部分 compositor 未将焦点交给临时 surface 时剪贴板访问可能挂起，也指出文本 MIME 类型推断可能失败；本项目用显式 MIME 和有界失败处理这些边界，不复制其 GPL 代码。
+Wayland 调用 `wl-copy` 与 `wl-paste` 时显式使用相同的 `text/plain;charset=utf-8` MIME 类型。超时或失败会回收本次调用创建的子进程组，诊断返回固定原因标签。桌面合成器的焦点策略可能使剪贴板访问失败，失败后不会切换后端重发。
 
 GNOME 原生 Wayland 焦点策略仍是外部限制，当前新后端尚未完成 VMware 实机验收，不能据此宣称所有 Wayland 桌面都可用。需要复用现有工具的兼容路径时，可明确设置 Xwayland `display`，选择 `clipboard_backend="x11"` 并安装 xclip/xsel；仍须在目标应用中核对粘贴效果。
 

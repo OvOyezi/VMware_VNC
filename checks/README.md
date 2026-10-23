@@ -1,6 +1,6 @@
 # 检查工具
 
-默认入口为仓库根目录的 `scripts/Test.ps1`，使用本机人工 RFB 服务或 mock，不操作真实虚拟机。该入口覆盖当前源码的合成行为；此处不固定跨开发轮次变化的检查总数。
+默认入口为仓库根目录的 `scripts/Test.ps1`，使用本机人工 RFB 服务或 mock，不操作真实虚拟机。
 
 默认回归同时维护 MCP 主入口与 CLI 辅助入口，不要求外部 `vmrun`、Tools 或来宾账号。下列真实端点工具各有自己的依赖，不能把某个验收驱动的前提当作基础 VNC 接管的前提。
 
@@ -13,9 +13,9 @@
 | vnc_diagnostics.py | MCP、Pillow、cryptography、websockets 与 native RFB 引擎诊断及可选剪贴板后端发现的只读边界 |
 | vnc_extensions.py | UTF-8 协商、惰性请求、sync-flush、profile、来宾剪贴板与断连后的状态清理 |
 | vnc_visual.py | 逐像素/区域条件、参考隔离、取消、并发、编码及参考文件限制 |
-| vnc_codec.py | 18 项有界无损 RFB 矩形解码与 Tight JPEG 拒绝检查 |
-| vnc_inspection.py | 9 项像素采样、参考差异、细节图与坐标映射检查 |
-| vnc_native_rfb.py | 17 项原生 asyncio RFB 握手、认证、分段消息、像素格式、完整帧发布、分辨率变化、输入与关闭检查 |
+| vnc_codec.py | 有界无损 RFB 矩形解码与 Tight JPEG 拒绝检查 |
+| vnc_inspection.py | 像素采样、参考差异、细节图与坐标映射检查 |
+| vnc_native_rfb.py | 原生 asyncio RFB 握手、认证、分段消息、像素格式、完整帧发布、分辨率变化、输入与关闭检查 |
 | vnc_fidelity.py | 经真实 MCP stdio 通道检查合成桌面画面采集与图像保真 |
 | vnc_frames.py | 分段首帧／resize、ROI、CopyRect 像素来源、快照与有界区域元数据 |
 | vnc_keys.py | 组合键规范化、别名、隐式修饰键和无效输入预检 |
@@ -54,7 +54,7 @@
 
 该命令会操作真实来宾桌面，不能作为默认回归运行。JSON 报告按目标列出 `passed`、`failed` 和 `not_executed` 步骤；非零退出码表示失败或未完成。
 
-验收基础 VNC 路径时，不运行这个依赖 `vmrun` 读回的驱动。使用未绑定 profile 的 VNC MCP，在真实系统应用或已有的可取消输入框中操作，以截图核对结果；逐键文字显式选择 `method="keys"`。具体版本与环境的已验证范围见 [兼容性](../docs/COMPATIBILITY.md)。
+验收基础 VNC 路径时，使用未绑定 profile 的 VNC MCP，在真实系统应用或可取消的输入框中操作，以截图核对结果；逐键文字显式选择 `method="keys"`。`vnc_input_live.py` 的来宾读回是独立辅助验证。环境条件见 [支持范围](../docs/COMPATIBILITY.md)。
 
 ## 测试窗口
 
@@ -62,7 +62,7 @@
 - `fixtures/visual_windows.ps1` 提供变化与固定区域。Windows PowerShell 5.1 / STA 下传入 ControlPath、ResultPath，控制文件可指定 generation、mode（static/pulse）和 red/green/blue。
 - `fixtures/input_windows.ps1`、`input_linux.py` 提供文本、按钮、可拖动画布和滚轮区域，记录真实事件与控件坐标。Windows 参数为 `-ResultPath PATH -Token TOKEN`；Linux 参数为 `RESULT_PATH TOKEN`，需要 GTK 3 / PyGObject 或 tkinter。GTK 夹具的坐标验收使用 X11，Wayland 会话可通过 Xwayland 运行夹具。
 
-这些窗口不会被安装或默认回归启动。实机先截图核对，具名调用同时携带两个 ID；结束后关闭自己的窗口并清理文件。验收步骤见 [兼容性](../docs/COMPATIBILITY.md)。
+这些窗口不会被安装或默认回归启动。实机先截图核对，具名调用同时携带两个 ID；结束后关闭测试窗口并清理文件。验证要求见 [贡献指南](../CONTRIBUTING.md)。
 
 ## 可选代理互操作
 

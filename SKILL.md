@@ -42,4 +42,4 @@ MCP 是 AI 连续交互的主要入口，可保留连接、会话和画面参考
 
 失败、超时或取消的输入不自动重放；先检查当前画面与连接状态。若连接返回 `display_state="unavailable"`（例如 0×0 帧缓冲），显式调用 `vnc_wake(session_id, connection_id)` 或 CLI `wake`，再截图并检查新画面。wake 只发送两次指针移动，不点击、不按键、不解锁；`wake_sent` 只表示动作已发送，不能证明显示已恢复。0×0 resize 会使当前可用画面失效，截图不会返回旧图；普通非零 resize 的旧快照仍保留原尺寸，直到新画面完整。截图的 `auto` 模式会先在已有连接上尝试一次有界完整刷新，失败后用短暂共享连接取完整首帧；需要指定行为时仍可选 `refresh` 或 `fresh`。保持的按键、鼠标按钮及会话资源由断开清理。组合键必须完整释放，分辨率变化后重新截图并确认坐标。连接、刷新、输入和队列问题见 [故障排查](references/troubleshooting.md)。
 
-修改后运行 `scripts/Test.ps1`；默认检查只连接本机人工 RFB 服务。兼容范围及实机验收方法见 [兼容性](docs/COMPATIBILITY.md)，维护要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+环境要求与已知限制见 [支持范围](docs/COMPATIBILITY.md)，维护入口见 [贡献指南](CONTRIBUTING.md)。

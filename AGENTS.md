@@ -1,6 +1,6 @@
 # VMware VNC 项目规范
 
-本文件记录本项目的产品定位、实现约束、验证与分发要求。产品说明见 `README.md`，设计取舍、成熟项目对照及后续规划见 `docs/DESIGN.md`；操作细节按下述文档分工维护，避免多份规范各自演变。
+本文件记录本项目的产品定位、实现约束、验证与分发要求。产品说明见 `README.md`，核心架构见 `docs/DESIGN.md`；操作细节按下述文档分工维护，避免多份规范各自演变。
 
 ## 产品方向与边界
 
@@ -31,9 +31,9 @@
 
 ## 文档分工
 
-- `AGENTS.md`：项目规范；`docs/DESIGN.md`：设计依据与规划，不重复制定另一套规则。
+- `AGENTS.md`：项目规范；`docs/DESIGN.md`：核心架构与模块职责。
 - `README.md`：面向项目使用者的定位、能力、安装、使用与限制；可以说明使用 Codex 开发，不能把项目写成仅限 Codex 的工具。
 - `SKILL.md`：AI 操作流程；`references/`：按需加载的安装和接口细节；`agents/openai.yaml`：Codex 的可选界面元数据。三者与 MCP 提示描述相同的真实能力。
-- `docs/COMPATIBILITY.md`：按版本和环境汇总兼容结论、证据边界及复现方法；`checks/README.md`：检查入口和夹具说明。
+- `docs/COMPATIBILITY.md`：当前支持范围、运行条件与已知限制；`checks/README.md`：检查入口和夹具说明。
 - `CONTRIBUTING.md`：贡献、验证和发布流程；`CHANGELOG.md`：影响使用或维护的版本变化。
 - GitHub 按正常开源项目维护，公开文档不保留个人工作流水账、机器部署经过或重复测试逐轮记录。详细报告放本机忽略目录，保留有用的兼容结论和已知限制；收拢重复内容，剔除失效指引和旧源码副本。

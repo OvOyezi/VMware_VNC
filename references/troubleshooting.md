@@ -9,12 +9,12 @@
 | 已连接但 `display_state="unavailable"` | 0×0 ServerInit、初始首帧缺失/不完整超时、0×0 resize 或后续捕获超时都可能使显示不可用；控制连接仍可保持 `connected=true`。不完整帧不会返回。释放保持的按键或按钮后，可显式调用 `vnc_wake`（CLI 使用 `wake`），再请求新截图并检查 |
 | VMware refresh 截图超时 | 默认 `auto` 会在已有连接上做一次有界完整刷新；失败后用短暂共享连接取得完整首帧。也可显式选 `fresh`。它不是缓存截图，也不保证更少网络流量 |
 | 截图超时或报告没有缓存图像 | 捕获超时会清除最近 frame/reference，保持连接的状态变为 `unavailable`；错误明确表示没有完整新帧且没有返回缓存图。释放保持输入，尝试 `vnc_wake` 后重新截图；只有完整新截图成功才恢复 `ready`。0×0 `DesktopSize` 也会使旧画面失效 |
-| VMware / GNOME 空闲后报告 0×0 或无法恢复 | 先尝试显式 `vnc_wake` 并重新截图；若仍无可用帧，检查来宾显示节能状态。强制关闭显示时 VNC pointer motion 可能无效；Ubuntu GNOME 的 PowerSaveMode=3 实测无法由 VNC 唤醒，需要来宾侧恢复显示服务。VNC 不承诺解锁或恢复被强制关闭的显示 |
+| VMware / GNOME 空闲后报告 0×0 或无法恢复 | 先尝试显式 `vnc_wake` 并重新截图；若仍无可用帧，检查来宾显示节能状态。来宾显示服务强制关闭时，可能需要从来宾侧恢复显示。wake 不解锁 |
 | connection_id 失效 | 重连、断线或空闲回收会改变连接。确认目标后显式重连，保存新 ID 并截图；不要自动重放旧输入 |
 | 队列满 / 操作超时 / 取消 | 停止提交后续输入，检查状态与新截图。取消为协作式，不能撤回已发送输入，也不能强行抢占单步网络等待与编码 |
 | 字母被输入法转换 | `method="keys"` 会经过当前来宾输入法，工具不切换输入法。先截图确认目标控件的焦点和输入模式，再重新观察；不要盲发整段文字 |
 | 连续输入缺字 | 显式键盘路径至少间隔 20 毫秒。先检查已有文字，再决定下一步；必要时只对 `method="keys"` 增加 `delay_ms`、分段输入并等待应用处理 |
-| 拖动约 5 秒后超时 | 拖动已改为最多 30 个可取消的移动步骤。核对 MCP 已加载新版本，超时后先重连截图确认实际窗口位置，不重放旧动作 |
+| 拖动超时 | 检查动作预算、网络响应与 MCP 服务进程版本。超时后先重连截图，确认实际窗口位置，不重放旧动作 |
 | `method="auto"` 拒绝文本 | 自动路径只选已协商 UTF-8 剪贴板或绑定 profile；没有任一通道时 ASCII 和 Unicode 都会在点击焦点及输入前拒绝。查看 capabilities，或显式配置 guest profile；若目标是键盘事件，先目视确认输入法后指定 `method="keys"` |
 | 键盘文字与预期不同 | `method="keys"` 结果带 `input_method_sensitive=true`，且 `application_verified=false`。检查该控件的输入模式并重新截图；工具不会自动切换 IME，也不保证字面文本 |
 | `clipboard_verified=true` 但控件没有文字 | 校验只证明剪贴板已准备。检查 focus 坐标、当前窗口、粘贴快捷键与应用是否接受粘贴；不要自动再发同一段 |
@@ -32,7 +32,7 @@
 
 默认回归测试：`pwsh -NoProfile -File <skill-root>/scripts/Test.ps1`。它验证模拟协议、无损编码、UTF-8 扩展、来宾调用边界、生命周期、队列和会话隔离。`vnc_diagnostics` 报告 `mcp`、Pillow、cryptography 和 native asyncio RFB 引擎状态；不会联系 VNC 端点。真实桌面文字与耐久测试单独验收，具体范围见 [兼容性记录](../docs/COMPATIBILITY.md)；不以有限时长测试承诺长期永不出错。
 
-核心分层与成熟项目取舍见 [设计说明](../docs/DESIGN.md)。
+模块职责与状态管理见 [核心架构](../docs/DESIGN.md)。
 
 TLS／WSS 证书失败时核对目标主机名、系统时间和 CA 文件；客户端不会跳过证书验证。WebSocket 代理需协商 binary 子协议并发送二进制消息，普通 KasmVNC 浏览器地址不等同于标准 RFB 代理。URL 错误只返回固定诊断，不回显其路径、查询或内嵌凭据。
 

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Modified and maintained for VMware VNC; historical attribution is in NOTICE.
+# Modified for VMware VNC.
 """Pixel comparisons and finite visual conditions, using existing Pillow primitives.
 
 Images are sampled evidence, not proof of application readiness or a continuous

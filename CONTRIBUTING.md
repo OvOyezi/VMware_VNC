@@ -1,32 +1,29 @@
-# 参与维护
+# 贡献指南
 
-本项目围绕 AI 可视化接管 VMware 虚拟机维护。稳定规则以 [AGENTS.md](AGENTS.md) 为准，技术取舍和规划见 [设计说明](docs/DESIGN.md)。MCP 主入口和 CLI 辅助入口共同维护，复用同一套 VNC 核心。
+欢迎通过 [Issues](https://github.com/OvOyezi/VMware_VNC/issues) 报告问题、提出需求，或提交 Pull Request。请说明具体任务、当前行为与预期结果。
 
-新增协议、编码或输入能力前，参考成熟 VNC 项目及公开协议，说明复用方案、实现选择和验收方法。基础接管不引入来宾账号、Tools 或外部 CLI 的强制依赖；人工客户端及其他服务端的需求先按实际 AI 任务评估。
+## 开发环境
 
-## 修改与检查
-
-现有 `scripts/` 维护脚本面向 Windows，要求 PowerShell 7；Python 运行时要求 3.11+。环境准备和检查入口为：
+使用 Windows、PowerShell 7 和 Python 3.11+：
 
 ```powershell
 pwsh -NoProfile -File ./scripts/Setup.ps1
 pwsh -NoProfile -File ./scripts/Test.ps1
 ```
 
-运行源码集中在 `src/vmware_vnc/`，依赖固定在 `requirements.lock.txt`。升级依赖需说明原因，重新验证安装和协议行为。来宾剪贴板辅助脚本随包分发，其工作范围限定为文本准备与校验。
+运行源码位于 `src/vmware_vnc/`，固定依赖见 `requirements.lock.txt`。模块分工见 [核心架构](docs/DESIGN.md)，产品边界与实现约束见 [AGENTS.md](AGENTS.md)。
 
-修改 skill 或文档后，检查相对链接、实际安装路径和元数据，并核对 README、技能说明、界面元数据和 MCP 提示是否一致。涉及分发或路径的修改，在独立安装目录验证导入、MCP 初始化及相关检查；保留 CLI 回归。仓库根目录可直接作为 skill 分发，独立使用 MCP 或 CLI 不要求安装 skill。
+## 验证修改
 
-默认检查只连接本机人工 RFB 服务。实机验收明确指定端点，连接后先检查画面，具名调用携带两个 ID。使用独立测试窗口核对文本和应用结果，结束后清理自己创建的连接、窗口及临时文件。失败或取消的输入不自动重放。
+默认检查连接临时人工 RFB 服务，覆盖 MCP、CLI、协议和会话行为，不操作真实虚拟机。检查工具及实机入口见 [checks/README.md](checks/README.md)。
 
-## 文档与提交
+- 修改公共能力时，同时验证 MCP 与 CLI 的对应行为。
+- 修改安装、资源或打包时，在独立安装目录检查导入、MCP 初始化和相关操作。
+- 修改接口或配置时，同步更新使用说明和示例，检查文档链接。
+- 实机验证明确指定端点，分别核对画面、输入与应用结果，结束后断开连接并清理测试内容。
 
-从 `main` 创建工作分支，完成修改和验证后提交。说明具体行为变化和已经完成的检查；区分合成服务、实机结果、AI 宿主接入及当前 MCP 进程。
+## 提交与反馈
 
-文档按 AGENTS.md 的分工维护当前接口、兼容限制和可复现验收步骤。GitHub 面向项目使用者和贡献者，清理个人部署流水账、重复报告及无使用价值的旧源码。详细执行记录放本机忽略目录；公开兼容性保留版本、结论和证据边界。发布记录只保留影响使用或维护的变化，版权与来源声明继续维护。
+提交说明写清问题、行为变化和完成的验证。报告兼容性时，提供项目版本、VNC 服务端、来宾显示环境和 AI 宿主；区分模拟服务与真实端点结果。不要提交密码、私有 profile 或含敏感信息的截图和日志。
 
-私有 profile、凭据、截图和日志放 `.local/` 或 `checks/results/`，不提交 Git。
-
-## 同步
-
-公开仓库为 [OvOyezi/VMware_VNC](https://github.com/OvOyezi/VMware_VNC)，`main` 分支根目录是源码和可选 skill 安装入口。发布时保持版本、MCP 与 CLI 说明、兼容结论和固定依赖一致；根据实际发布范围核对远端提交及分发副本，不把本机环境、profile 或凭据作为源码同步。
+版本变化记录在 [CHANGELOG.md](CHANGELOG.md)。发布前核对版本、安装说明、接口、支持范围与固定依赖是否一致。

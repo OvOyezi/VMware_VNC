@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Modified and maintained for VMware VNC; historical attribution is in NOTICE.
+# Modified for VMware VNC.
 """Precise pixel inspection for a captured VNC frame and optional reference."""
 from __future__ import annotations
 

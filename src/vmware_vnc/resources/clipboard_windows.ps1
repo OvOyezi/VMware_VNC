@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Modified and maintained for VMware VNC; historical attribution is in NOTICE.
+# Modified for VMware VNC.
 param([Parameter(Mandatory)][string]$PayloadPath, [Parameter(Mandatory)][string]$ResultPath)
 # Guest Windows PowerShell 5.1 is intentional: it is included with Windows.
 # Host-side maintenance continues to use PowerShell 7. ExecutionPolicy is scoped

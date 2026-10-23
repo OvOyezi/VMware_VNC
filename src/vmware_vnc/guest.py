@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Modified and maintained for VMware VNC; historical attribution is in NOTICE.
+# Modified for VMware VNC.
 """Endpoint-bound profiles and optional VMware clipboard preparation for VNC text."""
 from __future__ import annotations
 

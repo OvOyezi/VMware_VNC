@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Modified and maintained for VMware VNC; historical attribution is in NOTICE.
+# Modified for VMware VNC.
 """Canonical keyboard chord parsing for RFB key events.
 
 Key chords are represented as physical X11/RFB keysyms. Uppercase ASCII and

@@ -2,19 +2,20 @@
 
 [![checks](https://github.com/OvOyezi/VMware_VNC/actions/workflows/checks.yml/badge.svg)](https://github.com/OvOyezi/VMware_VNC/actions/workflows/checks.yml)
 
-为虚拟机提供 VNC 画面观察与桌面交互的 Codex skill，附带 MCP 服务和 `vnc-mcp` CLI。来宾可以是 Windows、Linux 或其他提供 VNC 桌面的系统。
+为虚拟机提供 VNC 画面观察与桌面交互的 Codex skill，附带 MCP 服务和 `vnc-mcp` CLI。来宾可以是 Windows、Linux 或其他提供 VNC 桌面的系统。0.4.0 使用项目自有的 asyncio RFB 传输与画面解码实现。
 
 建议将 VMware_VNC 与官方 `vmrun`，或其他可操作虚拟机的 CLI 工具搭配使用：命令行处理适合程序化的步骤，VMware_VNC 补充画面观察、点击、按键和界面结果核对。大部分日常桌面操作也可以仅靠 VMware_VNC 完成。
 
 ## 能力
 
-- 截取完整桌面或指定区域，保留原生尺寸与坐标，支持 PNG、JPEG。
+- 默认以 PNG 截取完整桌面或指定区域，保留原生尺寸与坐标；需要时可显式选择 JPEG。
+- 用 `vnc_inspect` 读取指定像素 RGB、比较参考画面，并生成可映射回原生坐标的细节图。
 - 点击、拖动、滚动、组合键和文本输入；多个桌面分别维护连接与操作队列。
 - 输入中文、表情及多行文字。使用 VNC UTF-8 Extended Clipboard，或显式配置的来宾剪贴板辅助通道。
 - 等待区域变化、匹配参考图或持续稳定，返回条件结果及最后有效截图。
 - 提供连接诊断、超时、取消与空闲回收；失败或取消的输入不自动重放。
 
-当前版本为 `0.3.3`，采用 Apache-2.0 许可证。MCP 和本项目 CLI 暴露同一套 VNC 能力；操作方法见 [SKILL.md](SKILL.md)及 [接口参考](references/operations.md)。
+当前版本为 `0.4.0`，采用 Apache-2.0 许可证。支持无损 RFB Raw、CopyRect、Hextile、ZRLE 和 Tight 子集；不接受 Tight JPEG 矩形。PNG 的 RGB8 表示解码后的服务端帧缓冲像素，不承诺显示器 HDR 或色彩配置文件。MCP 和本项目 CLI 暴露 VNC 操作；详细方法见 [SKILL.md](SKILL.md)及 [接口参考](references/operations.md)。
 
 ## 安装
 
@@ -59,7 +60,7 @@ vnc_disconnect(session_id="work", connection_id="<同一个 ID>")
 
 默认回归覆盖人工 RFB 协议、会话隔离、取消、文本和画面条件；GitHub Actions 在 Windows / Python 3.11、3.15 矩阵执行。测试分类与实机入口见 [checks/README.md](checks/README.md)。
 
-0.3.3 完成了四台 VMware 来宾的纯 VNC 输入验收：Windows 11、Windows 10、Ubuntu 26.10 使用系统应用和 YY / Firefox，Debian 13.6 按控制台键盘范围测试。修复后四台各通过 50 轮默认文字输入，三个图形桌面各通过 20 次窗口拖动，逐轮截图核对。中文通过来宾输入法选词；通用 Unicode 粘贴另需服务端扩展或可选来宾通道。具体范围及限制见 [兼容性](docs/COMPATIBILITY.md)。
+0.4.0 已在 Windows 11、Windows 10、Ubuntu 和 Debian 四台 VMware 来宾中复测。三个图形桌面的校准色块与预设 RGB 一致，能精确检出单像素、单通道相差 1 的变化；四台各通过 20 轮逐键输入，三个图形桌面各完成 10 次窗口拖动。中文通过来宾拼音输入法选词，通用 Unicode 粘贴另需服务端扩展或可选来宾通道。Debian 只计入控制台键盘覆盖；本轮与历史系统应用验收的具体范围见 [兼容性](docs/COMPATIBILITY.md)。
 
 ## 维护
 

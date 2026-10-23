@@ -31,6 +31,10 @@ class VisualFrame:
     capture_seconds: float = 0.0
     transport_bytes: int = 0
     wire_encoding: str | None = None
+    frame_id: str | None = None
+    received_at: float | None = None
+    updated_regions: tuple = ()
+    capture_source: str | None = None
 
     @property
     def region(self) -> Region:
@@ -54,7 +58,9 @@ class VisualFrame:
         image = encode_frame(self.image, image_format, quality)
         return replace(image, desktop_width=self.desktop_width, desktop_height=self.desktop_height,
                        x=self.x, y=self.y, capture_seconds=round(self.capture_seconds + time.monotonic()-started, 6),
-                       transport_bytes=self.transport_bytes, wire_encoding=self.wire_encoding)
+                       transport_bytes=self.transport_bytes, wire_encoding=self.wire_encoding,
+                       frame_id=self.frame_id, received_at=self.received_at,
+                       updated_regions=self.updated_regions, capture_source=self.capture_source)
 
 
 @dataclass(frozen=True)

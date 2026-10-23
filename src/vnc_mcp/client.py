@@ -1,195 +1,41 @@
-"""Synchronous VNC session wrapper around vncdotool."""
-
+"""Serialized VNC desktop session over the project-owned asyncio RFB core."""
 from __future__ import annotations
 
 import math
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
-from functools import partial
-import struct
 import threading
 import time
 from typing import Any
 from uuid import uuid4
 
-from vncdotool import api, rfb
-from vncdotool.client import VNCDoToolClient, VNCDoToolFactory
-from twisted.internet import reactor
-from twisted.internet.defer import Deferred
-
+from .rfb import RFBConnection, keysyms
 from .imaging import Screenshot, validate_encoding, validate_region
 from .operations import ActionCancelled, ActionControl, ActionTimedOut
-from .clipboard import ExtendedClipboard, MAX_CLIPBOARD_BYTES, validate_text
+from .clipboard import validate_text
 from .guest import GuestProfile, VmrunClipboard
 from .visual import VisualFrame, VisualReference, reference_from_file
 
-
-_REACTOR_START_LOCK = threading.Lock()
 MIN_KEY_EVENT_GAP_MS = 20
 
 
-class _ClipboardClient(VNCDoToolClient):
-    def dataReceived(self, data: bytes) -> None:
-        self.factory.received_bytes += len(data)
-        super().dataReceived(data)
-
-    def setEncodings(self, encodings) -> None:
-        preference = self.factory.network_encoding
-        # vncdotool 1.4.2's ZRLE packed-palette reader ignores per-row
-        # padding. Do not advertise it: real narrow TigerVNC rectangles fail.
-        choices = {"auto": [rfb.Encoding.HEXTILE, rfb.Encoding.RAW],
-                   "hextile": [rfb.Encoding.HEXTILE, rfb.Encoding.RAW], "raw": [rfb.Encoding.RAW]}
-        pseudos = [value for value in encodings if value < 0]
-        super().setEncodings([*choices[preference], *pseudos, rfb.Encoding.PSEUDO_EXTENDED_CLIPBOARD])
-
-    def _handleRectangle(self, block: bytes) -> None:
-        encoding = struct.unpack("!HHHHi", block)[4]
-        if encoding >= 0:
-            self.factory.wire_encoding = {0: "raw", 5: "hextile", 16: "zrle"}.get(encoding, str(encoding))
-        super()._handleRectangle(block)
-
-    def _handleServerCutText(self, block: bytes) -> None:
-        length, = struct.unpack("!3xi", block)
-        if abs(length) > MAX_CLIPBOARD_BYTES or (length < 0 and length > -4):
-            self.factory.protocol_error = "clipboard_size_limit"
-            self.transport.abortConnection()
-            return
-        self.expect(self._receive_clipboard, abs(length), length < 0)
-
-    def _receive_clipboard(self, block: bytes, extended: bool) -> None:
-        try:
-            if extended:
-                messages, text, sent = self.factory.ext_clipboard.receive(block)
-                for message in messages:
-                    self.transport.write(message)
-                if text is not None:
-                    self.copy_text(text)
-                    self.factory.clipboard_encoding = "utf-8"
-                if sent:
-                    self.factory.clipboard_sent.set()
-            else:
-                self.copy_text(block.decode("iso-8859-1"))
-                self.factory.clipboard_encoding = "iso-8859-1"
-        except (ValueError, struct.error) as exc:
-            self.factory.protocol_error = "invalid_extended_clipboard: " + str(exc)[:200]
-            self.transport.abortConnection()
-            return
-        self.expect(self._handleConnection, 1)
-
-    def set_clipboard_utf8(self, text: str) -> _ClipboardClient:
-        message, sent = self.factory.ext_clipboard.set_text(text)
-        self.factory.clipboard_sent.clear()
-        self.transport.write(message)
-        if sent:
-            self.factory.clipboard_sent.set()
-        return self
-
-    def connectionMade(self) -> None:
-        self.factory.active_protocol = self
-        if self.factory.close_requested:
-            self.transport.abortConnection()
-            return
-        super().connectionMade()
-
-    def connectionLost(self, reason: Any) -> None:
-        try:
-            super().connectionLost(reason)
-        finally:
-            # The upstream proxy/factory/Deferred form reference cycles. Fresh
-            # snapshots must not keep multi-megabyte framebuffers alive until
-            # a cyclic GC pass; release large and private state on closure.
-            self.screen = None
-            self._packet.clear()
-            self.factory.active_protocol = None
-            self.factory.latest_clipboard = ""
-            self.factory.ext_clipboard.local_text = None
-            self.factory.closed.set()
-
-    def copy_text(self, text: str) -> None:
-        self.factory.latest_clipboard = text
-
-    def capture_frame(self, frames: list, region: tuple[int, int, int, int] | None = None) -> Any:
-        # Keep the proxy's Deferred result as the protocol, just as captureScreen
-        # does. Only copy a completed framebuffer here; CPU-heavy encoding must
-        # run outside the reactor so unrelated connections can keep processing.
-        def capture(result: Any) -> _ClipboardClient:
-            if self.screen is None:
-                raise RuntimeError("VNC server did not provide a framebuffer")
-            frames.append(self.screen.copy())
-            return self
-
-        if region is None:
-            deferred = self.refreshScreen(incremental=False)
-        else:
-            x, y, width, height = validate_region(region, self.width, self.height)
-            # The upstream first-rectangle path assumes an origin of (0,0).
-            # Establish its native canvas before a partial first frame arrives.
-            if self.screen is None and (x, y, width, height) != (0, 0, self.width, self.height):
-                self.updateDesktopSize(self.width, self.height)
-            deferred = self.deferred = Deferred()
-            self.framebufferUpdateRequest(x=x, y=y, width=width, height=height, incremental=False)
-        deferred.addCallback(capture)
-        return deferred
-
-    def type_batch(self, text: str, control: ActionControl) -> _ClipboardClient:
-        for char in text:
-            control.check()
-            if char == "\r":
-                continue
-            if char == "\n":
-                self.keyPress("enter")
-            elif char == "\t":
-                self.keyPress("tab")
-            elif ord(char) <= 0xFF:
-                self.keyPress("minus" if char == "-" else char)
-            else:
-                self.unicode_key(ord(char))
-        return self
-
-    def unicode_key(self, codepoint: int) -> _ClipboardClient:
-        # vncdotool's synchronous proxy chains method return values through its
-        # connection Deferred. Raw keyEvent returns None and breaks that chain.
-        # Emit both events on the reactor thread, then preserve the protocol.
-        keysym = 0x01000000 | codepoint
-        self.keyEvent(keysym, down=True)
-        self.keyEvent(keysym, down=False)
-        return self
-
-
-class _ClipboardFactory(VNCDoToolFactory):
-    protocol = _ClipboardClient
-    force_caps = True
-
-    def __init__(self, network_encoding: str = "auto") -> None:
-        super().__init__()
-        self.network_encoding = network_encoding
-        self.wire_encoding: str | None = None
-        self.received_bytes = 0
-        self.ext_clipboard = ExtendedClipboard()
-        self.clipboard_sent = threading.Event()
-        self.clipboard_encoding = "iso-8859-1"
-        self.protocol_error: str | None = None
-        self.latest_clipboard = ""
-        self.closed = threading.Event()
-        self.close_requested = False
-        self.active_protocol: _ClipboardClient | None = None
-
-
 class VNCSession:
-    def __init__(self, timeout: float = 15.0, screenshot_mode: str = "refresh", action_timeout: float = 20.0,
+    def __init__(self, timeout: float = 15.0, screenshot_mode: str = "auto", action_timeout: float = 20.0,
                  network_encoding: str = "auto") -> None:
         if not math.isfinite(timeout) or not 0 < timeout <= 60:
             raise ValueError("timeout must be finite and between 0 and 60 seconds")
         if not math.isfinite(action_timeout) or not 0 < action_timeout <= 60:
             raise ValueError("action_timeout must be finite and between 0 and 60 seconds")
-        if screenshot_mode not in {"refresh", "fresh"}:
-            raise ValueError("screenshot_mode must be refresh or fresh")
-        if network_encoding not in {"auto", "raw", "hextile"}:
-            raise ValueError("network_encoding must be auto, raw or hextile")
+        if screenshot_mode not in {"auto", "refresh", "fresh"}:
+            raise ValueError("screenshot_mode must be auto, refresh or fresh")
+        if network_encoding not in {"auto", "raw", "hextile", "zrle", "tight"}:
+            raise ValueError("network_encoding must be auto, raw, hextile, zrle or tight")
         self.network_encoding = network_encoding
+        self._refresh_strategy = "probe" if screenshot_mode == "auto" else screenshot_mode
         self.guest_profile: GuestProfile | None = None
         self._visual_reference: VisualReference | None = None
+        self._last_visual_frame: VisualFrame | None = None
         self.timeout = timeout
         self.screenshot_mode = screenshot_mode
         self.action_timeout = action_timeout
@@ -215,40 +61,21 @@ class VNCSession:
             raise ValueError("guest profile endpoint does not match this VNC connection")
         with self._lock:
             self.disconnect()
-            endpoint_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
-            endpoint = f"{endpoint_host}::{port}"
-            self.client = self._connect_client(endpoint, password)
-            try:
-                # api.connect starts the background reactor; an initial refresh waits
-                # for protocol negotiation and the server's first framebuffer update.
-                self._call("refreshScreen", incremental=False)
-            except Exception:
-                self.disconnect()
-                raise
+            self.client = self._connect_client(host, port, password)
+            self._refresh_strategy = "probe" if self.screenshot_mode == "auto" else self.screenshot_mode
             self.host, self.port = host, port
             self.guest_profile = profile
-            raw_name = getattr(self.client.protocol, "name", "")
+            raw_name = getattr(self.client, "name", "")
             self.name = raw_name.decode("utf-8", "replace") if isinstance(raw_name, bytes) else str(raw_name)
-            screen = getattr(self.client.protocol, "screen", None)
+            screen = getattr(self.client, "screen", None)
             if screen is not None:
                 self.width, self.height = screen.size
             self.connection_id = uuid4().hex
             return self.status()
 
-    def _connect_client(self, endpoint: str, password: str | None) -> Any:
-        # vncdotool 1.4.2 checks reactor.running before starting its global
-        # thread without a lock. Concurrent first connects can start it twice.
-        # Only serialize creation through the first reactor callback; desktop
-        # negotiation and all steady-state operations remain independent.
-        with _REACTOR_START_LOCK:
-            client = api.connect(endpoint, password=password, timeout=self.timeout,
-                                 factory_class=partial(_ClipboardFactory, self.network_encoding))
-            ready = threading.Event()
-            reactor.callFromThread(ready.set)
-            if not ready.wait(self.timeout):
-                self._close_client(client)
-                raise TimeoutError("VNC reactor did not start in time")
-            return client
+    def _connect_client(self, host: str, port: int, password: str | None,
+                        initial_region: tuple[int, int, int, int] | None = None) -> RFBConnection:
+        return RFBConnection(host, port, password, self.timeout, self.network_encoding, initial_region)
 
     def execute(self, method: str, args: tuple, control: ActionControl, expected: str | None, pin: bool) -> Any:
         with self._lock:
@@ -261,7 +88,7 @@ class VNCSession:
                 control.check()
                 return result
             except (ActionCancelled, ActionTimedOut):
-                if method not in {"capture", "screenshot", "status", "clipboard_get", "visual_sample", "visual_reference"}:
+                if method not in {"capture", "screenshot", "status", "clipboard_get", "visual_sample", "visual_reference", "inspect"}:
                     self.disconnect()
                 raise
             finally:
@@ -277,42 +104,19 @@ class VNCSession:
             self.connection_id = None
             self.guest_profile = None
             self._visual_reference = None
+            self._last_visual_frame = None
             if client is not None:
                 self._close_client(client, keys, buttons)
             return self.status()
 
-    def _close_client(self, client: Any, keys: tuple = (), buttons: tuple = ()) -> None:
-        # The upstream synchronous disconnect is chained behind pending commands.
-        # A timeout or failed Deferred can therefore prevent it from closing at
-        # all. Close the transport directly on its owning reactor thread instead.
-        client.factory.close_requested = True
-        finished = threading.Event()
-
-        def close() -> None:
-            try:
-                protocol = client.factory.active_protocol
-                transport = getattr(protocol, "transport", None)
-                if transport is not None and transport.connected:
-                    for method, value in [("keyUp", key) for key in keys] + [
-                        ("mouseUp", button if type(button) is int else
-                         {"left": 1, "middle": 2, "right": 3}[button]) for button in buttons
-                    ]:
-                        try:
-                            getattr(protocol, method)(value)
-                        except Exception:
-                            pass
-                    transport.loseConnection()
-            finally:
-                finished.set()
-
-        reactor.callFromThread(close)
-        finished.wait(timeout=self.timeout)
+    def _close_client(self, client: RFBConnection, keys: tuple = (), buttons: tuple = ()) -> None:
+        client.close(keys, buttons)
 
     def status(self) -> dict[str, Any]:
         with self._lock:
-            if self.client is not None and self.client.factory.closed.is_set():
+            if self.client is not None and self.client.closed.is_set():
                 return self.disconnect()
-            screen = getattr(getattr(self.client, "protocol", None), "screen", None)
+            screen = getattr(self.client, "screen", None)
             if screen is not None and (self.screenshot_mode == "refresh" or self.width is None or self.height is None):
                 self.width, self.height = screen.size
             return {
@@ -326,16 +130,20 @@ class VNCSession:
                 "height": self.height,
                 "guest_profile": self.guest_profile.name if self.guest_profile else None,
                 "capabilities": {
-                    "utf8_clipboard": bool(self.client and self.client.factory.ext_clipboard.supported),
+                    "utf8_clipboard": bool(self.client and self.client.ext_clipboard.supported),
                     "guest_text": self.guest_profile is not None,
                     "preferred_encoding": self.network_encoding,
-                    "wire_encoding": self.client.factory.wire_encoding if self.client else None,
+                    "wire_encoding": self.client.wire_encoding if self.client else None,
+                    "engine": "native-asyncio-rfb",
+                    "refresh_strategy": self._refresh_strategy,
+                    "fence": bool(self.client and self.client.fence_supported),
+                    "continuous_updates": bool(self.client and self.client.continuous_supported),
                 },
             }
 
     def _require_client(self) -> Any:
-        if self.client is not None and self.client.factory.closed.is_set():
-            reason = self.client.factory.protocol_error
+        if self.client is not None and self.client.closed.is_set():
+            reason = self.client.protocol_error
             self.disconnect()
             if reason:
                 raise ConnectionError(f"RFB protocol rejected ({reason}); reconnect explicitly after inspecting the target")
@@ -433,33 +241,77 @@ class VNCSession:
             self._visual_reference = VisualReference(reference_id, frame)
             return reference_id
 
+    def inspect(self, region: tuple[int, int, int, int] | None = None,
+                reference_id: str | None = None, points: list[tuple[int, int]] | None = None,
+                detail_region: tuple[int, int, int, int] | None = None,
+                zoom: int = 4, pixel_threshold: int = 0, frame_id: str | None = None):
+        from .inspection import inspect_frame
+        with self._lock:
+            self._require_client()
+            if frame_id is not None:
+                frame = self._last_visual_frame
+                if frame is None or frame.frame_id != frame_id:
+                    raise ValueError("unknown or expired frame_id; capture and inspect the intended frame again")
+            else:
+                frame = self._capture_frame(region)
+            selected = frame.crop(region).require_bounded()
+            reference = self.visual_reference(reference_id, selected.region) if reference_id else None
+            result = inspect_frame(selected, reference, points, detail_region, zoom, pixel_threshold)
+            result.details.update(frame_id=frame.frame_id, frame_received_monotonic=frame.received_at,
+                                  connection_id=self.connection_id, capture_source=frame.capture_source,
+                                  reference_frame_id=reference.frame_id if reference else None,
+                                  cached_frame=frame_id is not None,
+                                  frame_age_seconds=round(max(0, time.monotonic() - frame.received_at), 6) if frame.received_at else None)
+            images = []
+            for kind, image in result.images:
+                mapping = result.details["image_metadata"][kind]
+                source = reference if kind == "detail_reference" else frame
+                images.append((kind, replace(image, frame_id=source.frame_id, received_at=source.received_at,
+                                            capture_source=source.capture_source, display_scale=mapping["scale"],
+                                            color_semantics=mapping["color_semantics"])))
+            return replace(result, images=images)
+
     def _capture_frame(self, region: tuple[int, int, int, int] | None = None) -> VisualFrame:
         with self._lock:
             started = time.monotonic()
             client = self._require_client()
             if region is not None:
-                validate_region(region, self.width or client.protocol.width, self.height or client.protocol.height)
-            before_bytes = client.factory.received_bytes
+                validate_region(region, self.width or client.width, self.height or client.height)
+            before_bytes = client.received_bytes
             frames = []
-            if self.screenshot_mode == "fresh":
-                # Some VMware VNC servers do not answer repeated full-refresh
-                # requests on an unchanged display. Obtain the initial full
-                # frame on a separate shared connection, keeping held input
-                # and the control channel intact.
-                endpoint_host = f"[{self.host}]" if ":" in self.host and not self.host.startswith("[") else self.host
-                snapshot = self._connect_client(f"{endpoint_host}::{self.port}", client.factory.password)
+            snapshot_client = None
+            if self._refresh_strategy != "fresh":
                 try:
-                    snapshot.capture_frame(frames, region)
+                    # Probe once per connection. A missed read is safe to abandon;
+                    # no input is retried and cached pixels are never called fresh.
+                    budget = min(self.timeout, 0.5) if self._refresh_strategy == "probe" else self.timeout
+                    client.capture_frame(frames, region, timeout=budget)
+                    self._refresh_strategy = "refresh"
+                except TimeoutError:
+                    if self.screenshot_mode != "auto":
+                        self.disconnect()
+                        raise
+                    self._refresh_strategy = "fresh"
+                except Exception:
+                    self.disconnect()
+                    raise
+            if self._refresh_strategy == "fresh":
+                snapshot_client = self._connect_client(self.host, self.port, client.password, region)
+                try:
+                    snapshot = snapshot_client.initial_snapshot()
+                    frames.append(snapshot.image.copy())
+                    transport_bytes = snapshot_client.received_bytes
+                    wire_encoding = snapshot_client.wire_encoding
                 finally:
-                    self._close_client(snapshot)
-                transport_bytes = snapshot.factory.received_bytes
-                wire_encoding = snapshot.factory.wire_encoding
+                    self._close_client(snapshot_client)
+                source = "fresh-connection"
             else:
-                self._call("capture_frame", frames, region)
-                transport_bytes = client.factory.received_bytes - before_bytes
-                wire_encoding = client.factory.wire_encoding
-            if not frames:
-                raise RuntimeError("VNC client did not report screen dimensions")
+                snapshot = client.last_snapshot
+                transport_bytes = client.received_bytes - before_bytes
+                wire_encoding = client.wire_encoding
+                source = "framebuffer-update"
+            if not frames or snapshot is None:
+                raise RuntimeError("VNC server did not return a complete framebuffer")
             frame = frames[0]
             self.width, self.height = frame.size
             reference = self._visual_reference
@@ -467,12 +319,18 @@ class VNCSession:
                 self._visual_reference = None
             if self._control is not None:
                 self._control.check()
-            return VisualFrame(frame, *frame.size, capture_seconds=time.monotonic()-started,
-                               transport_bytes=transport_bytes, wire_encoding=wire_encoding)
+            result = VisualFrame(frame, *frame.size, capture_seconds=time.monotonic()-started,
+                               transport_bytes=transport_bytes, wire_encoding=wire_encoding,
+                               frame_id=snapshot.frame_id, received_at=snapshot.received_at,
+                               updated_regions=snapshot.updated_regions, capture_source=source)
+            if snapshot.valid_region is not None:
+                result = result.crop(snapshot.valid_region)
+            self._last_visual_frame = result
+            return result
 
     def _check_point(self, x: int, y: int) -> None:
         client = self._require_client()
-        screen = getattr(client.protocol, "screen", None)
+        screen = getattr(client, "screen", None)
         if screen is not None and (self.screenshot_mode == "refresh" or self.width is None or self.height is None):
             self.width, self.height = screen.size
         if self.width is not None and self.height is not None:
@@ -570,8 +428,8 @@ class VNCSession:
             raise ValueError("key must not be empty")
         with self._lock:
             normalized = self._normalize_key(key)
-            pressed_parts = set(normalized.split("-"))
-            held_parts = {part for held in self._held_keys for part in held.split("-")}
+            pressed_parts = set(keysyms(normalized))
+            held_parts = {value for held in self._held_keys for value in keysyms(held)}
             if pressed_parts & held_parts:
                 raise ValueError("cannot pulse a key or chord that overlaps an already held key; release held keys first")
             with self._input_action() as control:
@@ -607,6 +465,8 @@ class VNCSession:
 
     @staticmethod
     def _normalize_key(key: str) -> str:
+        if len(key) == 1:
+            return key
         parts = key.strip().replace("+", "-").split("-")
         aliases = {
             "backspace": "bsp", "escape": "esc", "return": "enter",
@@ -678,13 +538,13 @@ class VNCSession:
         validate_text(text)
         with self._lock:
             client = self._require_client()
-            if client.factory.ext_clipboard.supported:
+            if client.ext_clipboard.supported:
                 self._call("set_clipboard_utf8", text)
                 # Notify transfers ownership; lazy X11 servers request bytes
                 # only when an application pastes. Waiting here would deadlock
                 # the very Ctrl+V that causes Request -> Provide.
                 return {"clipboard_characters": len(text), "encoding": "utf-8", "clipboard_offered": True,
-                        "clipboard_data_sent": client.factory.clipboard_sent.is_set(), "application_verified": False}
+                        "clipboard_data_sent": client.clipboard_sent.is_set(), "application_verified": False}
             try:
                 text.encode("iso-8859-1")
             except UnicodeEncodeError as exc:
@@ -695,7 +555,7 @@ class VNCSession:
     def clipboard_get(self) -> dict[str, Any]:
         with self._lock:
             client = self._require_client()
-            return {"text": client.factory.latest_clipboard, "encoding": client.factory.clipboard_encoding,
+            return {"text": client.latest_clipboard, "encoding": client.clipboard_encoding,
                     "cached": True}
 
     def send_text(self, text: str, method: str = "auto", paste_key: str = "ctrl-v",
@@ -723,7 +583,7 @@ class VNCSession:
                 raise ValueError("release held keys and mouse buttons before submitting literal text")
             selected = "keys" if delay_ms else method
             if selected == "auto":
-                selected = "clipboard" if client.factory.ext_clipboard.supported else "guest" if self.guest_profile else "keys"
+                selected = "clipboard" if client.ext_clipboard.supported else "guest" if self.guest_profile else "keys"
                 if selected == "keys" and any(ord(char) > 255 for char in text):
                     raise ValueError("Unicode text needs a negotiated UTF-8 clipboard or an explicit guest profile; use method=keys only for a server known to accept Unicode keysyms")
             result = {"submitted_characters": len(text), "typed_characters": len(text), "transport": selected, "paste_sent": False,
@@ -766,12 +626,12 @@ class VNCSession:
                 control.wait(0.15)
             self.keypress(paste_key)
             result["paste_sent"] = True
-            if selected == "clipboard" and client.factory.ext_clipboard.supported:
+            if selected == "clipboard" and client.ext_clipboard.supported:
                 until = min(control.deadline, time.monotonic() + 0.5)
-                while not client.factory.clipboard_sent.is_set() and time.monotonic() < until:
+                while not client.clipboard_sent.is_set() and time.monotonic() < until:
                     control.wait(min(0.02, max(0, until - time.monotonic())))
                     self._require_client()
-                result["clipboard_data_sent"] = client.factory.clipboard_sent.is_set()
+                result["clipboard_data_sent"] = client.clipboard_sent.is_set()
             return result
 
     def wait(self, seconds: float) -> dict[str, Any]:
@@ -780,7 +640,7 @@ class VNCSession:
         with self._lock:
             client = self._require_client()
         # CLI/direct callers should not prevent a concurrent disconnect either.
-        if client.factory.closed.wait(seconds):
+        if client.closed.wait(seconds):
             raise ConnectionError("VNC connection closed during wait")
         with self._lock:
             if self._require_client() is not client:

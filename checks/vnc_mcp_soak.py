@@ -541,7 +541,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--interval", type=_positive_finite, default=2.0,
                         help="seconds between concurrent screenshot rounds (default: 2)")
     parser.add_argument("--output", type=Path, required=True, help="checkpoint and final JSON report path")
-    parser.add_argument("--screenshot-mode", choices=("fresh", "refresh"), default="refresh")
+    parser.add_argument("--screenshot-mode", choices=("auto", "fresh", "refresh"), default="auto")
     parser.add_argument("--allow-live", action="store_true", help="authorize connections to the supplied endpoints")
     parser.add_argument("--self-test", action="store_true", help="use synthetic loopback RFB fixtures only")
     return parser

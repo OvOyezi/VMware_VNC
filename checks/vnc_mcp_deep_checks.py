@@ -669,7 +669,7 @@ def backend_checks(args, report, a, b):
     assert not errors and threads == ["encoding-worker"]
     assert metrics["independent_keypress_during_slow_encode_seconds"] < 0.15
     metrics["image_encoding_threads"] = threads
-    checks["encoding_outside_reactor_keeps_other_connections_responsive"] = True
+    checks["encoding_outside_io_loop_keeps_other_connections_responsive"] = True
     before = keys(a, 120)
     control = ActionControl(time.monotonic() + 0.075)
     try:

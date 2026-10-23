@@ -25,6 +25,20 @@ vnc_wait_for(condition="stable", region={"x": 100, "y": 180, "width": 300, "heig
 
 changed / matches 默认比较参考图区域；也可以指定其内部的子区域。每个连接只保留一张显式记住的图，至多 16,777,216 像素。普通截图不替换参考，新 remember、桌面尺寸变化、断开或重连会使旧参考失效。参考仅驻留内存，不自动保存到磁盘。
 
+`frame_id` 与 `reference_id` 用途不同。截图元数据中的 `frame_id` 标识最近一张捕获帧；传给 `vnc_inspect(frame_id=...)` 会直接检查这帧，不发送网络刷新请求。每个连接只缓存最新帧，新截图或重连会使旧 ID 失效。`reference_id` 仍只由 `remember=true` 创建，并按上段规则保留。
+
+需要精确像素或局部细节时，可用 `vnc_inspect` 对最近帧采样：
+
+```python
+vnc_inspect(frame_id="<最近截图的 frame_id>", reference_id="<remember 返回的 ID>",
+            points=[{"x": 120, "y": 230}], zoom=4, pixel_threshold=0,
+            session_id="work", connection_id="<同一个连接 ID>")
+```
+
+current 图保持原生 RGB 颜色和像素尺寸。比较时可返回 `detail_current`、`detail_reference` 与 `difference_amplified`；最后一张把每通道绝对差乘以 16 并截到 255，颜色经过修改，只用于显示微小差异。逐点结果给出原生坐标、当前 RGB、参考 RGB 与有符号通道差值。细节图元数据会说明原生区域、输出尺寸和缩放比例。显式区域每边不超过 512 像素，放大输出最多 4,194,304 像素；自动差异区域在变化边界外留 8 像素并将每边限制为 256 像素。检查能力不依赖 OCR 或模型。
+
+截图还包含 `frame_received_monotonic`、`updated_regions`、`capture_source`、`lossless` 与 `source_rgb_sha256`。源像素哈希对区域宽高的大端序字节和 RGB 字节计算 SHA-256。PNG `lossless=true`；JPEG 仍是有损压缩。单调时间只用于本进程计算帧龄，不可跨进程比较。
+
 ## 容差和预算
 
 - pixel_threshold 默认 8，任一 RGB 通道的差异严格大于它才计为变化像素，范围 0–255。

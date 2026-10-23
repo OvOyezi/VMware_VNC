@@ -1,6 +1,6 @@
 # VNC 操作参考
 
-按画面条件等待变化、匹配或稳定时，见 [visual-waits.md](visual-waits.md)。`vnc_screenshot(remember=true)` 返回连接内参考 ID，`vnc_wait_for` 返回最终图和条件结果；普通定时 `vnc_wait` 仍可用。
+按画面条件等待变化、匹配或稳定时，见 [visual-waits.md](visual-waits.md)。`vnc_screenshot(remember=true)` 返回连接内参考 ID，`vnc_wait_for` 返回最终图和条件结果；`vnc_inspect` 可精确读取像素和比较画面；普通定时 `vnc_wait` 仍可用。
 
 以下均为本项目的 VNC 接口，调用省略宿主提供的工具前缀，以当前 `vmware_vnc` MCP 注册的实际名称为准。
 
@@ -16,7 +16,9 @@ vnc_screenshot(session_id="desktop-a", connection_id="<本次返回的 ID>")
 
 需要 VNC 认证时，在 MCP 启动环境中提供 `VNC_PASSWORD_ENV` 指定的变量，默认变量名为 `VNC_PASSWORD`；单次 `vnc_connect` 也接受 `password` 参数。通过宿主的凭据机制传递真实值，不在示例、日志或报告中展开。
 
-截图默认 JPEG、质量 80、4:4:4、不缩放；精确像素用 `image_format="png"`。区域使用 `region={"x": 100, "y": 200, "width": 640, "height": 480}`。点击图内 `(20, 30)` 时，应使用原生坐标 `(120, 230)`；优先采用本次截图元数据中的实际原点。
+截图默认使用 PNG，保留原生尺寸和 RGB8 帧缓冲像素；JPEG 仅在显式指定 `image_format="jpeg"` 时使用，质量参数范围为 1–95。区域示例：`region={"x": 100, "y": 200, "width": 640, "height": 480}`。点击图内 `(20, 30)` 时，应使用原生坐标 `(120, 230)`；优先采用本次截图元数据中的实际原点。RGB8 是服务端提供的像素值，不保证显示器 HDR 或色彩配置文件。MCP 图片携带 `_meta.codex/imageDetail="original"` 客户端提示，不代表后续模型链路一定保留原始细节。
+
+MCP 会话默认 `screenshot_mode="auto"`：先在当前连接上做一次有界完整刷新；如果服务端未按时返回完整帧，则通过共享的短暂连接获取初始完整帧。`refresh` 和 `fresh` 仍可显式选择。两种路径都返回实际捕获的帧，不使用旧缓存伪装为新截图。
 
 ## 工具参数
 
@@ -30,6 +32,7 @@ vnc_screenshot(session_id="desktop-a", connection_id="<本次返回的 ID>")
 | vnc_status | session_id；等待该会话此前操作后读取实时状态 |
 | vnc_sessions | 无参数；非阻塞缓存清单，不证明端点此刻仍在线 |
 | vnc_screenshot | image_format、quality、region、remember；记住参考时返回 reference_id |
+| vnc_inspect | region、reference_id、points、detail_region、zoom、pixel_threshold、frame_id；返回原色 PNG、RGB 采样及可选细节/差异图 |
 | vnc_wait_for | condition、reference_id、region、timeout、interval、stable_for、pixel_threshold、max_changed_ratio；见画面条件参考 |
 | vnc_click | x、y、button（left/middle/right）、count（1–3） |
 | vnc_move | x、y |
@@ -55,9 +58,15 @@ vnc_screenshot(session_id="desktop-a", connection_id="<本次返回的 ID>")
 
 `vnc_keypress` 会拒绝与当前保持按键重叠的组合键，先用 `vnc_key_up` 释放后再操作。
 
-文字输入与来宾配置见 [text-input.md](text-input.md)。截图元数据另含 capture_seconds、transport_bytes、wire_encoding；前两者是本次客户端捕获耗时与该阶段接收的 RFB 字节数，fresh 包含短截图连接的握手，refresh 可能含同期通知。它们不代表应用响应时间或整个系统的带宽。
+文字输入与来宾配置见 [text-input.md](text-input.md)。截图元数据包括 `capture_seconds`、`transport_bytes`、`wire_encoding`、`frame_id`、`frame_received_monotonic`、`updated_regions`、`capture_source`、`lossless` 和 `source_rgb_sha256`。`frame_received_monotonic` 来自单调时钟，只适合本进程计算帧龄。`source_rgb_sha256` 是将图像区域宽高按大端序打包后与 RGB 字节拼接计算的 SHA-256；它描述编码前的源像素，JPEG 输出仍是有损的。`capture_seconds` 是本次客户端捕获耗时，`transport_bytes` 是该阶段接收的 RFB 字节数；fresh 包含短截图连接握手，refresh 可能含同期通知。它们不代表应用响应时间或整个系统的带宽。
 
-VNC_ENCODING / CLI `--encoding` 可选 auto、hextile、raw。auto 优先无损 Hextile，并提供 RAW。服务端决定实际编码；VMware 内置 VNC 实机仍选 RAW。当前固定依赖的 ZRLE 解码有兼容性问题，未向服务端声明支持。
+RFB 传输由本项目的 asyncio 实现管理，运行依赖诊断报告 `mcp`、Pillow、cryptography 及传输引擎状态。`VNC_ENCODING` / CLI `--encoding` 可选 `auto`、`raw`、`hextile`、`zrle`、`tight`。`auto` 声明支持无损 ZRLE、Tight、Hextile、CopyRect 和 RAW；显式编码偏好也保留 RAW 回退。Tight 只接受无损子集，遇到 Tight JPEG 矩形会拒绝该帧。
+
+## 画面检查
+
+`vnc_inspect` 接受可选 `region`、`reference_id`、`points=[{"x": 120, "y": 230}]`、`detail_region`、`zoom`、`pixel_threshold` 与 `frame_id`。坐标均为桌面原生坐标。它始终返回当前原色 PNG；指定参考图时还会返回参考比较、逐点 RGB 和 delta，以及可选的 `detail_current`、`detail_reference`、`difference_amplified`。差异图把每通道绝对差乘以 16、最高截到 255，并放大显示，因此颜色是人为增强的；查看原像素请使用 current PNG 或精确 RGB 数值。
+
+`zoom` 默认为 4，范围 1–8；显式细节区域每边最多 512 像素，放大结果最多 4,194,304 像素。若参考比较发现变化且未指定细节区域，会围绕变化边界加 8 像素留白并将每边限制为 256 像素。`frame_id` 可复用最近捕获帧，不发新的 RFB 请求；仅保留每个连接的最新帧，新捕获或重连会使旧 ID 失效。`reference_id` 生命周期不变，仍由最近一次 `remember=true` 截图持有。
 
 ## 多桌面
 
@@ -77,6 +86,7 @@ CLI 每次命令都会建立独立连接，结束时断开；不保留 MCP 会�
 $skillRoot = 'C:/path/to/vmware-vnc' # 实际安装目录
 $vnc = "$skillRoot/.venv/Scripts/vnc-mcp.exe"
 & $vnc screenshot --host 127.0.0.1 --port 5901 --screenshot-mode fresh --format jpeg --output "$skillRoot/checks/results/screen.jpg"
+& $vnc inspect --host 127.0.0.1 --port 5901 --point 120 230 --detail-region 100 180 120 80 --zoom 4 --pixel-threshold 0 --output-dir "$skillRoot/checks/results/inspect"
 & $vnc keypress --host 127.0.0.1 --port 5901 ctrl-c
 & $vnc --help
 ```
@@ -86,5 +96,7 @@ $vnc = "$skillRoot/.venv/Scripts/vnc-mcp.exe"
 点击的两个位置参数依次为桌面原生 `x y`，例如 `& $vnc click --host $vncHost --port $vncPort $x $y --button left --count 1`。端点和坐标变量须来自已确认的目标及刚检查过的截图；不要直接使用示例端点或猜测坐标。完整参数可查 `& $vnc click --help`。
 
 `vnc-mcp doctor` 为只读本机诊断；`vnc-mcp profiles --profiles-file <本机配置>` 列出端点。文字命令支持 `text --text-file <UTF-8 文件> --profile <名称> --profiles-file <文件> --focus X Y`，仍须显式提供 host、port。
+
+`inspect` 支持重复的 `--point X Y`、`--detail-region X Y WIDTH HEIGHT`、`--zoom`、`--pixel-threshold`、`--reference-file` 和 `--output-dir`；单命令 CLI 连接不能复用 MCP 的 `frame_id`。该功能不依赖 OCR 或模型。
 
 回归分类和显式实机验收入口见 [检查工具](../checks/README.md)。

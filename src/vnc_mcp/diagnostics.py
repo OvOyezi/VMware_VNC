@@ -13,10 +13,9 @@ from . import __version__
 
 
 _DISTRIBUTIONS = {
-    "vncdotool": "vncdotool",
     "mcp": "mcp",
     "Pillow": "Pillow",
-    "Twisted": "Twisted",
+    "cryptography": "cryptography",
 }
 
 
@@ -72,9 +71,11 @@ def _discover_vmrun() -> dict[str, Any]:
 
 def get_diagnostics() -> dict[str, Any]:
     """Collect JSON-serializable runtime facts without contacting any VNC endpoint."""
+    from .rfb import runtime_info
     return {
         "schema_version": 1,
         "application": {"name": "vnc-mcp", "version": __version__},
+        "transport": runtime_info(),
         "python": {
             "version": platform.python_version(),
             "executable": sys.executable,

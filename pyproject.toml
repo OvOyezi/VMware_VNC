@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vnc-mcp"
-version = "0.3.3"
+version = "0.4.0"
 description = "VNC screen observation and desktop input tools for virtual machines"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,8 +12,9 @@ authors = [{ name = "Shinko" }]
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 dependencies = [
-  "vncdotool==1.4.2",
   "mcp==1.30.0",
+  "pillow==13.0.0",
+  "cryptography==50.0.2",
 ]
 
 [project.urls]

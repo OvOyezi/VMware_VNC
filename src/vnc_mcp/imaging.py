@@ -1,8 +1,11 @@
-"""Image encoding independent of the VNC reactor and MCP transport."""
+"""Image encoding independent of the RFB reader and MCP transport."""
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 from io import BytesIO
+import struct
+import time
 
 from PIL import Image
 
@@ -21,6 +24,13 @@ class Screenshot:
     transport_bytes: int | None = None
     wire_encoding: str | None = None
     reference_id: str | None = None
+    frame_id: str | None = None
+    received_at: float | None = None
+    updated_regions: tuple = ()
+    capture_source: str | None = None
+    source_rgb_sha256: str | None = None
+    display_scale: int = 1
+    color_semantics: str = "original"
 
     def metadata(self) -> dict:
         metadata = {
@@ -31,9 +41,21 @@ class Screenshot:
             "capture_seconds": self.capture_seconds,
             "transport_bytes": self.transport_bytes,
             "wire_encoding": self.wire_encoding,
+            "frame_id": self.frame_id,
+            "frame_received_monotonic": self.received_at,
+            "updated_regions": self.updated_regions,
+            "capture_source": self.capture_source,
+            "lossless": self.image_format == "png",
+            "display_scale": self.display_scale,
+            "color_semantics": self.color_semantics,
+            "source_rgb_sha256": self.source_rgb_sha256,
+            "source_pixel_format": "RGB8",
+            "frame_age_seconds": round(max(0, time.monotonic() - self.received_at), 6) if self.received_at else None,
         }
         if self.reference_id is not None:
             metadata["reference_id"] = self.reference_id
+        if self.display_scale != 1:
+            metadata["coordinates"] = "Display enlargement: native coordinate = origin + image-local coordinate/display_scale."
         return metadata
 
 
@@ -60,7 +82,11 @@ def encode_frame(frame: Image.Image, image_format: str, quality: int, region: tu
     desktop_width, desktop_height = frame.size
     x, y, width, height = validate_region(region, desktop_width, desktop_height)
     image = frame if region is None else frame.crop((x, y, x + width, y + height))
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+    digest = sha256(struct.pack("!II", width, height) + image.tobytes()).hexdigest()
     output = BytesIO()
     options = {"quality": quality, "subsampling": 0, "optimize": True} if image_format == "jpeg" else {}
     image.save(output, format=image_format.upper(), **options)
-    return Screenshot(output.getvalue(), image_format, desktop_width, desktop_height, x, y, width, height)
+    return Screenshot(output.getvalue(), image_format, desktop_width, desktop_height, x, y, width, height,
+                      source_rgb_sha256=digest)

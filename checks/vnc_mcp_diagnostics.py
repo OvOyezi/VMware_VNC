@@ -22,7 +22,7 @@ class DiagnosticsChecks(unittest.TestCase):
         with mock.patch.object(_diagnostics.metadata, "version", side_effect=missing):
             versions = _diagnostics.get_diagnostics()["runtime_versions"]
         self.assertEqual(
-            set(versions), {"vncdotool", "mcp", "Pillow", "Twisted"}
+            set(versions), {"mcp", "Pillow", "cryptography"}
         )
         for dependency in versions.values():
             self.assertEqual(dependency["available"], False)

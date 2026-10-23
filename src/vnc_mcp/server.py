@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import base64
 import json
 import os
 from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.utilities.types import Image
+from mcp.types import ImageContent
 from pydantic import BaseModel, Field
 
 from .client import VNCSession
@@ -20,7 +21,7 @@ from .diagnostics import get_diagnostics
 def _new_session() -> VNCSession:
     return VNCSession(
         timeout=float(os.environ.get("VNC_TIMEOUT", "15")),
-        screenshot_mode=os.environ.get("VNC_SCREENSHOT_MODE", "refresh"),
+        screenshot_mode=os.environ.get("VNC_SCREENSHOT_MODE", "auto"),
         action_timeout=float(os.environ.get("VNC_ACTION_TIMEOUT", "20")),
         network_encoding=os.environ.get("VNC_ENCODING", "auto"),
     )
@@ -58,6 +59,17 @@ class ScreenshotRegion(BaseModel):
     height: int = Field(gt=0, strict=True)
 
 
+class PixelPoint(BaseModel):
+    x: int = Field(ge=0, strict=True)
+    y: int = Field(ge=0, strict=True)
+
+
+def _image_content(image) -> ImageContent:
+    return ImageContent(type="image", mimeType=f"image/{image.image_format}",
+                        data=base64.b64encode(image.data).decode("ascii"),
+                        _meta={"codex/imageDetail": "original"})
+
+
 mcp = FastMCP(
     "VNC Desktop",
     lifespan=_lifespan,
@@ -78,6 +90,9 @@ mcp = FastMCP(
         "A sent paste is not proof that the application accepted text. Never replay failed input automatically. "
         "Use vnc_screenshot(remember=true) before an action when you need a pixel reference, then vnc_wait_for "
         "changed/matches, or stable without a reference. These are sampled visual conditions, not application readiness. "
+        "Screenshots default to lossless native-size PNG. For exact colors or subtle differences use vnc_inspect; "
+        "pass a screenshot frame_id to inspect those exact cached pixels without a new capture. "
+        "Amplified difference images alter colors; current and detail_current retain original colors. "
         "Call vnc_screenshot again after actions to verify the result."
     ),
 )
@@ -141,15 +156,37 @@ async def vnc_sessions() -> dict:
 
 
 @mcp.tool()
-async def vnc_screenshot(image_format: Literal["jpeg", "png"] = "jpeg", quality: int = 80, region: ScreenshotRegion | None = None, connection_id: str | None = None, session_id: str = DEFAULT_SESSION, remember: bool = False) -> list:
+async def vnc_screenshot(image_format: Literal["jpeg", "png"] = "png", quality: int = 80, region: ScreenshotRegion | None = None, connection_id: str | None = None, session_id: str = DEFAULT_SESSION, remember: bool = False) -> list:
     """Capture the native desktop or a region {x,y,width,height}. JPEG quality: 1-95; PNG is lossless. Add region origin to image-local coordinates. remember=true returns a reference_id for vnc_wait_for; only the latest reference per connection is retained, until replacement, resize or disconnect. No scaling."""
     box = (region.x, region.y, region.width, region.height) if region is not None else None
     result = await REGISTRY.run("capture", image_format, quality, box, remember, session_id=session_id, connection_id=connection_id)
     image = result.value
     return [
         json.dumps({**image.metadata(), "session_id": result.session_id, "connection_id": result.connection_id}),
-        Image(data=image.data, format=image_format),
+        _image_content(image),
     ]
+
+
+@mcp.tool()
+async def vnc_inspect(region: ScreenshotRegion | None = None, reference_id: str | None = None,
+                      points: list[PixelPoint] | None = None, detail_region: ScreenshotRegion | None = None,
+                      zoom: int = 4, pixel_threshold: int = 0, frame_id: str | None = None,
+                      connection_id: str | None = None, session_id: str = DEFAULT_SESSION) -> list:
+    """Inspect exact RGB pixels and subtle differences. Always returns original-color PNG; optional native-coordinate points return RGB and reference deltas. A reference_id from screenshot(remember=true) enables exact comparison (threshold 0 default), original-color before/after crops and a separately labeled x16 amplified difference. zoom 1-8 is nearest-neighbor display enlargement; add origin plus image coordinate/zoom for native coordinates. Explicit detail region max 512x512 and enlarged image max 4M pixels. Optional frame_id reuses the latest captured frame, with age reported, instead of capturing; replaced/reconnected frame IDs fail. Pass both IDs for named sessions. No input or model inference."""
+    box = (region.x, region.y, region.width, region.height) if region else None
+    detail = (detail_region.x, detail_region.y, detail_region.width, detail_region.height) if detail_region else None
+    coordinates = [(point.x, point.y) for point in points] if points is not None else None
+    result = await REGISTRY.run("inspect", box, reference_id, coordinates, detail, zoom, pixel_threshold, frame_id,
+                                session_id=session_id, connection_id=connection_id)
+    inspection = result.value
+    content = [json.dumps({**inspection.details, "session_id": result.session_id,
+                           "connection_id": result.connection_id,
+                           "image_order": [kind for kind, _ in inspection.images]})]
+    for kind, image in inspection.images:
+        content.append(json.dumps({"image_kind": kind, **image.metadata(),
+                                   "mapping": inspection.details["image_metadata"][kind]}))
+        content.append(_image_content(image))
+    return content
 
 
 @mcp.tool()
@@ -239,7 +276,7 @@ async def vnc_wait_for(condition: Literal["changed", "matches", "stable"] = "sta
                        reference_id: str | None = None, region: ScreenshotRegion | None = None,
                        timeout: float = 10.0, interval: float = 0.25, stable_for: float = 0.5,
                        pixel_threshold: int = 8, max_changed_ratio: float = 0.001,
-                       image_format: Literal["jpeg", "png"] = "jpeg", quality: int = 80,
+                       image_format: Literal["jpeg", "png"] = "png", quality: int = 80,
                        connection_id: str | None = None, session_id: str = DEFAULT_SESSION) -> list:
     """Read-only sampled visual condition, returning the final screenshot and matched/timed_out. changed/matches need a reference_id from screenshot(remember=true); stable uses its own first frame and needs no reference. A pixel changes when any RGB channel differs by more than pixel_threshold; matches allows at most max_changed_ratio of pixels to change. Stable compares to one anchor for stable_for seconds. Region must be inside the reference. Timeout 0 samples once (changed/matches); other timeouts are 0-60 seconds. Polling releases the session queue between samples, never sends input, and never reconnects. A stable or matching picture does not prove application readiness. Always pass both IDs for named sessions."""
     box = (region.x, region.y, region.width, region.height) if region is not None else None
@@ -249,7 +286,7 @@ async def vnc_wait_for(condition: Literal["changed", "matches", "stable"] = "sta
     image = result.value.screenshot
     return [json.dumps({**image.metadata(), **result.value.details,
                         "session_id": result.session_id, "connection_id": result.connection_id}),
-            Image(data=image.data, format=image_format)]
+            _image_content(image)]
 
 
 def run() -> None:

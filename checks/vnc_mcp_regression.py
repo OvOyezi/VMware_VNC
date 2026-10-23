@@ -247,11 +247,17 @@ async def run_mode(args, mode, a, b, report):
                     assert status["connected"], "Failed snapshot must not poison the control channel"
                 await screenshot()
                 checks["screenshot_timeout_cleanup_and_recovery"] = True
+                # Native keys are validated before any input reaches the
+                # transport. A typo cannot poison the queue or clear a target.
+                before = len(a.events)
+                before_status = await call("vnc_status")
                 assert (await session.call_tool("vnc_keypress", {"key": "nonexistentkey"})).isError
-                assert not (await call("vnc_status"))["connected"]
-                await connect(a)
+                after_status = await call("vnc_status")
+                assert after_status["connected"]
+                assert after_status["connection_id"] == before_status["connection_id"]
+                assert len(a.events) == before
                 await screenshot()
-                checks["failed_proxy_command_cleared_and_reconnects"] = True
+                checks["invalid_key_rejected_before_transport_preserves_target"] = True
                 await call("vnc_key_down", key="ctrl")
                 await call("vnc_mouse_down", x=9, y=10, button="left")
                 # Leave input held: EOF must run the server lifespan cleanup.

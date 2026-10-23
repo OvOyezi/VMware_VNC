@@ -17,7 +17,11 @@ $checks = @(
     @{ Name = 'multisession'; Script = 'vnc_mcp_multisession.py' },
     @{ Name = 'diagnostics'; Script = 'vnc_mcp_diagnostics.py' },
     @{ Name = 'extensions'; Script = 'vnc_mcp_extensions.py' },
-    @{ Name = 'visual'; Script = 'vnc_mcp_visual.py' }
+    @{ Name = 'visual'; Script = 'vnc_mcp_visual.py' },
+    @{ Name = 'codec'; Script = 'vnc_mcp_codec.py' },
+    @{ Name = 'native-rfb'; Script = 'vnc_mcp_native_rfb.py' },
+    @{ Name = 'inspection'; Script = 'vnc_mcp_inspection.py' },
+    @{ Name = 'fidelity'; Script = 'vnc_mcp_fidelity.py' }
 )
 $count = 0
 foreach ($check in $checks) {

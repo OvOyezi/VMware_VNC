@@ -27,47 +27,55 @@ from vnc_mcp_regression import Fixture, payload
 
 def startup_child(args):
     sys.path.insert(0, str(args.source / "src"))
-    from twisted.internet import reactor
-    from vncdotool import api
     from vnc_mcp.client import VNCSession
+    from vnc_mcp.rfb import runtime_info
 
-    original_run = reactor.run
-    gate, barrier = threading.Event(), threading.Barrier(2)
-    launches, errors = [], []
-
-    def delayed_run(**kwargs):
-        launches.append(threading.current_thread())
-        gate.wait(2)
-        try:
-            original_run(**kwargs)
-        except Exception as exc:
-            errors.append(type(exc).__name__)
-
-    reactor.run = delayed_run
-    timer = threading.Timer(0.2, gate.set)
-    timer.start()
+    barrier = threading.Barrier(2)
+    errors = []
+    states = [None, None]
+    clients = [None, None]
     sessions = [VNCSession(timeout=2) for _ in range(2)]
 
     def connect(index):
-        barrier.wait(2)
-        return sessions[index].connect("127.0.0.1", args.startup_child[index])
+        try:
+            barrier.wait(timeout=5)
+            states[index] = sessions[index].connect("127.0.0.1", args.startup_child[index])
+        except Exception as exc:
+            errors.append({"index": index, "type": type(exc).__name__, "message": str(exc)})
 
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
-            states = list(pool.map(connect, range(2)))
-        result = {"reactor_threads_started": len(launches), "reactor_errors": errors,
-                  "both_connected": all(state["connected"] for state in states)}
-        assert result["both_connected"]
-        assert len(launches) == 1 and not errors, result
-        print(json.dumps(result))
+            futures = [pool.submit(connect, index) for index in range(2)]
+            for future in futures:
+                future.result(timeout=8)
+
+        clients = [session.client for session in sessions]
+        runtime = runtime_info()
+        io_thread_names = [thread.name for thread in threading.enumerate() if thread.name == "vnc-rfb-io"]
+        protocol_errors = [client.protocol_error for client in clients if client is not None]
+        result = {
+            "runtime": runtime,
+            "io_thread_names": io_thread_names,
+            "both_connected": all(state is not None and state["connected"] for state in states),
+            "connect_errors": errors,
+            "protocol_errors": protocol_errors,
+        }
+        assert result["both_connected"], result
+        assert not errors and protocol_errors == [None, None], result
+        assert runtime["engine"] == "native-asyncio-rfb" and runtime["io_threads"] == 1, result
+        assert io_thread_names == ["vnc-rfb-io"], result
     finally:
-        gate.set()
+        cleanup_errors = []
         for session in sessions:
-            session.disconnect()
-        api.shutdown()
-        for thread in launches:
-            thread.join(2)
-        timer.join(2)
+            try:
+                session.disconnect()
+            except Exception as exc:
+                cleanup_errors.append(f"{type(exc).__name__}: {exc}")
+        closed = [client.closed.wait(2) if client is not None else True for client in clients]
+        if cleanup_errors or not all(closed):
+            raise AssertionError({"cleanup_errors": cleanup_errors, "clients_closed_after_cleanup": closed})
+    result["clients_closed_after_cleanup"] = True
+    print(json.dumps(result))
 
 
 @asynccontextmanager
@@ -514,8 +522,8 @@ def main():
                    "--startup-child", str(fixtures[0].port), str(fixtures[1].port)]
         result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", timeout=12)
         assert result.returncode == 0, (result.stdout, result.stderr)
-        report["metrics"]["concurrent_reactor_startup"] = json.loads(result.stdout)
-        report["checks"]["concurrent_connections_share_one_reactor_without_errors"] = True
+        report["metrics"]["concurrent_native_startup"] = json.loads(result.stdout)
+        report["checks"]["concurrent_first_connections_share_one_io_thread_without_errors"] = True
         asyncio.run(main_checks(args, report, fixtures))
         errors = [error for fixture in fixtures for error in fixture.errors]
         assert not errors, errors

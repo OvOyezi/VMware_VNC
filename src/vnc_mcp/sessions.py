@@ -148,7 +148,7 @@ class SessionRegistry:
                               region: tuple[int, int, int, int] | None = None, timeout: float = 10.0,
                               interval: float = 0.25, stable_for: float = 0.5,
                               pixel_threshold: int = 8, max_changed_ratio: float = 0.001,
-                              image_format: str = "jpeg", quality: int = 80,
+                              image_format: str = "png", quality: int = 80,
                               session_id: str = DEFAULT_SESSION, connection_id: str | None = None) -> SessionResult:
         settings = VisualCondition(condition, timeout, interval, stable_for, pixel_threshold, max_changed_ratio)
         image_format = validate_encoding(image_format, quality)

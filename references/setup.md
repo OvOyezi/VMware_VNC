@@ -37,8 +37,8 @@ pwsh -NoProfile -File "$skillRoot/scripts/Get-McpConfig.ps1"
 | --- | --- | --- |
 | VNC_TIMEOUT | 服务 15 秒；生成片段 5 秒 | 单步网络等待 |
 | VNC_ACTION_TIMEOUT | 20 秒 | 协作式操作预算 |
-| VNC_SCREENSHOT_MODE | 服务 refresh；生成片段 fresh | VMware 推荐 fresh，独立共享连接获取首帧 |
-| VNC_ENCODING | auto | 优先无损 Hextile，提供 RAW；可固定 hextile / raw |
+| VNC_SCREENSHOT_MODE | auto | 先尝试当前连接刷新，超时后使用共享短连接取首帧；也可指定 refresh / fresh |
+| VNC_ENCODING | auto | 提供无损 ZRLE、Tight、Hextile、CopyRect 和 RAW；也可指定 zrle / tight / hextile / raw，保留 RAW 回退 |
 | VNC_MAX_SESSIONS | 4 | 上限 1–32 |
 | VNC_IDLE_TIMEOUT | 300 秒 | 0 禁用空闲回收 |
 | VNC_HOST / VNC_PORT | 无 | 可选默认目标；生成片段不设置 |

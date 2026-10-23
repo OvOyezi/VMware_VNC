@@ -7,10 +7,14 @@
 | vnc_mcp_smoke.py | MCP 初始化、模拟连接、截图像素与输入协议 |
 | vnc_mcp_regression.py | refresh / fresh 生命周期、状态清理及本项目 CLI |
 | vnc_mcp_deep_checks.py | 队列、取消、输入前预算核对、按键时间戳、拖动顺序与终点、编码及分段输入完整性 |
-| vnc_mcp_multisession.py | 会话隔离、ID、容量、空闲回收与并发 reactor 启动 |
-| vnc_mcp_diagnostics.py | 运行依赖诊断及可选剪贴板后端发现的只读边界 |
-| vnc_mcp_extensions.py | UTF-8 协商、惰性请求、sync-flush、profile、来宾剪贴板与缓冲释放 |
+| vnc_mcp_multisession.py | 会话隔离、ID、容量、空闲回收与同时首次连接；检查所有连接可用、共用一个 native I/O 线程且能正常清理 |
+| vnc_mcp_diagnostics.py | MCP、Pillow、cryptography 与 native RFB 引擎诊断及可选剪贴板后端发现的只读边界 |
+| vnc_mcp_extensions.py | UTF-8 协商、惰性请求、sync-flush、profile、来宾剪贴板与断连后的状态清理 |
 | vnc_mcp_visual.py | 逐像素/区域条件、参考隔离、取消、并发、编码及参考文件限制 |
+| vnc_mcp_codec.py | 18 项有界无损 RFB 矩形解码与 Tight JPEG 拒绝检查 |
+| vnc_mcp_inspection.py | 9 项像素采样、参考差异、细节图与坐标映射检查 |
+| vnc_mcp_native_rfb.py | 17 项原生 asyncio RFB 握手、认证、分段消息、像素格式、完整帧发布、分辨率变化、输入与关闭检查 |
+| vnc_mcp_fidelity.py | 经真实 MCP stdio 通道检查合成桌面画面采集与图像保真 |
 
 检查直接验证当前实现。输出 JSON、日志和截图保存在 `results/`，不加入 Git。
 
@@ -22,7 +26,7 @@
 | --- | --- |
 | vnc_mcp_multisession_live.py | 通过实际注册 MCP 检查至少两台桌面的连接、截图、重连和会话隔离；不发送键鼠 |
 | vnc_mcp_soak.py | 持续只读截图与计划重连；`--self-test` 只访问人工服务，实机须传 `--allow-live` |
-| vnc_mcp_refresh_diagnose.py | 跟踪 RFB 帧缓冲请求和完成情况；不发送键鼠 |
+| vnc_mcp_refresh_diagnose.py | 只读记录会话与捕获元数据中的刷新耗时和来源；不追踪私有协议缓冲，也不发送键鼠 |
 | vnc_mcp_input_live.py | 对四台明确配置的来宾执行输入、视觉、Unicode、会话隔离和应用结果读回验收；必须传 `--allow-live` |
 
 多会话检查示例，先替换配置和端点：

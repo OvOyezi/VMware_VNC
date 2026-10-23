@@ -198,13 +198,13 @@ async def run(args, report, fixture):
                 assert before.getpixel((12, 15)) != after.getpixel((12, 15)) == (255, 0, 255)
                 assert any(e.get("mask") == 1 and e.get("x") == 12 and e.get("y") == 15 for e in fixture.events)
                 report["checks"]["pointer_and_changed_framebuffer"] = True
-                jpeg = await session.call_tool("vnc_screenshot")
+                jpeg = await session.call_tool("vnc_screenshot", {"image_format": "jpeg"})
                 assert not jpeg.isError
                 compressed = next(x for x in jpeg.content if x.type == "image")
                 assert compressed.mimeType == "image/jpeg"
                 with Image.open(BytesIO(base64.b64decode(compressed.data))) as encoded:
                     assert encoded.size == (64, 48) and encoded.format == "JPEG"
-                report["checks"]["default_jpeg_preserves_native_coordinates"] = True
+                report["checks"]["explicit_jpeg_preserves_native_coordinates"] = True
                 payload(await session.call_tool("vnc_keypress", {"key": "ctrl+l"}))
                 payload(await session.call_tool("vnc_type", {"text": "Hi-中\n", "method": "keys"}))
                 await asyncio.sleep(0.1)

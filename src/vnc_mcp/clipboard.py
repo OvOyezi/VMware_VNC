@@ -43,7 +43,7 @@ def message(flags: int, data: bytes = b"") -> bytes:
 
 
 class ExtendedClipboard:
-    """Protocol state belongs to one connection and runs on its reactor thread."""
+    """Protocol state belongs to one connection and runs on its I/O loop."""
 
     def __init__(self) -> None:
         self.server_flags = 0

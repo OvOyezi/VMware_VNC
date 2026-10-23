@@ -1,2 +1,1 @@
-vncdotool==1.4.2
-mcp==1.30.0
+-r requirements.lock.txt

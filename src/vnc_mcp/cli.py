@@ -18,8 +18,8 @@ def _connection_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--password-env", default="VNC_PASSWORD", help="environment variable holding VNC password")
     parser.add_argument("--ask-password", action="store_true", help="explicitly prompt for a password; automation never prompts by default")
     parser.add_argument("--timeout", type=float, default=15.0, help="operation timeout in seconds")
-    parser.add_argument("--screenshot-mode", choices=("refresh", "fresh"), default=os.environ.get("VNC_SCREENSHOT_MODE", "refresh"), help="use fresh for VMware servers with refresh timeouts")
-    parser.add_argument("--encoding", choices=("auto", "raw", "hextile"), default=os.environ.get("VNC_ENCODING", "auto"), help="lossless RFB transport encoding preference, with raw fallback")
+    parser.add_argument("--screenshot-mode", choices=("auto", "refresh", "fresh"), default=os.environ.get("VNC_SCREENSHOT_MODE", "auto"), help="probe refresh once, with a fresh shared-connection fallback")
+    parser.add_argument("--encoding", choices=("auto", "raw", "hextile", "zrle", "tight"), default=os.environ.get("VNC_ENCODING", "auto"), help="lossless RFB transport encoding preference, with raw fallback")
     parser.add_argument("--profile", help="explicit VMware guest profile to bind to this endpoint")
     parser.add_argument("--profiles-file", help="local TOML profile file (or VNC_PROFILES_FILE)")
 
@@ -88,6 +88,21 @@ def _run_action(args: argparse.Namespace) -> int:
             target = Path(args.output or ("screenshot.jpg" if args.image_format == "jpeg" else "screenshot.png"))
             target.write_bytes(image.data)
             result = {"saved": str(target.resolve()), **image.metadata()}
+        elif args.command == "inspect":
+            region = tuple(args.region) if args.region else None
+            reference = session.load_visual_reference(args.reference_file, region) if args.reference_file else None
+            inspected = session.inspect(region, reference,
+                                        [tuple(point) for point in args.point] if args.point else None,
+                                        tuple(args.detail_region) if args.detail_region else None,
+                                        args.zoom, args.pixel_threshold)
+            target = Path(args.output_dir)
+            target.mkdir(parents=True, exist_ok=True)
+            saved = {}
+            for kind, image in inspected.images:
+                path = target / f"{kind}.png"
+                path.write_bytes(image.data)
+                saved[kind] = str(path.resolve())
+            result = {**inspected.details, "saved": saved}
         elif args.command == "click":
             result = session.click(args.x, args.y, args.button, args.count)
         elif args.command == "move":
@@ -136,8 +151,7 @@ def _run_action(args: argparse.Namespace) -> int:
         print(f"vnc-mcp: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
     finally:
-        # vncdotool's reactor runs in a daemon thread; disconnect only after
-        # pending VNC actions have drained, without hanging on an unopened client.
+        # Close only after the selected operation has completed or failed.
         if session is not None and session.client is not None:
             try:
                 session.disconnect()
@@ -162,6 +176,15 @@ def build_parser() -> argparse.ArgumentParser:
     screenshot.add_argument("--format", dest="image_format", choices=("png", "jpeg"), default="png")
     screenshot.add_argument("--quality", type=int, default=80)
     screenshot.add_argument("--region", nargs=4, type=int, metavar=("X", "Y", "WIDTH", "HEIGHT"))
+    inspect = sub.add_parser("inspect", help="inspect lossless pixels and optional reference differences")
+    _connection_options(inspect)
+    inspect.add_argument("--reference-file", help="explicit PNG/JPEG reference with matching selected-region dimensions")
+    inspect.add_argument("--region", nargs=4, type=int, metavar=("X", "Y", "WIDTH", "HEIGHT"))
+    inspect.add_argument("--point", nargs=2, type=int, action="append", metavar=("X", "Y"))
+    inspect.add_argument("--detail-region", nargs=4, type=int, metavar=("X", "Y", "WIDTH", "HEIGHT"))
+    inspect.add_argument("--zoom", type=int, default=4)
+    inspect.add_argument("--pixel-threshold", type=int, default=0)
+    inspect.add_argument("--output-dir", required=True, help="directory for current and clearly labeled detail PNGs")
     click = sub.add_parser("click", help="click at screen coordinates")
     _connection_options(click)
     click.add_argument("x", type=int)

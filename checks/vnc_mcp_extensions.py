@@ -533,12 +533,12 @@ class ExtensionChecks(unittest.TestCase):
             self.assertTrue(
                 _wait_until(
                     lambda: session.client is not None
-                    and session.client.factory.latest_clipboard == expected_text
+                    and session.client.latest_clipboard == expected_text
                 )
             )
-            factory = session.client.factory
-            self.assertTrue(factory.ext_clipboard.supported)
-            self.assertEqual(factory.clipboard_encoding, "utf-8")
+            client = session.client
+            self.assertTrue(client.ext_clipboard.supported)
+            self.assertEqual(client.clipboard_encoding, "utf-8")
             self.assertEqual(session.clipboard_get()["text"], expected_text)
             self.assertTrue(session.status()["capabilities"]["utf8_clipboard"])
 
@@ -580,16 +580,16 @@ class ExtensionChecks(unittest.TestCase):
                 self.assertTrue(
                     _wait_until(
                         lambda s=session, value=expected: s.client is not None
-                        and s.client.factory.latest_clipboard == value
+                        and s.client.latest_clipboard == value
                     )
                 )
-                self.assertTrue(session.client.factory.ext_clipboard.supported)
+                self.assertTrue(session.client.ext_clipboard.supported)
 
             first_local_text = "only connection one owns this clipboard 🔒"
             sessions[0].clipboard_set(first_local_text)
             self.assertTrue(fixtures[0].client_provide_seen.wait(4))
-            self.assertEqual(sessions[0].client.factory.ext_clipboard.local_text, first_local_text)
-            self.assertIsNone(sessions[1].client.factory.ext_clipboard.local_text)
+            self.assertEqual(sessions[0].client.ext_clipboard.local_text, first_local_text)
+            self.assertIsNone(sessions[1].client.ext_clipboard.local_text)
             self.assertEqual(sessions[1].clipboard_get()["text"], expected_texts[1])
         finally:
             cleanup_errors = _close_loopback(fixtures, sessions)
@@ -603,11 +603,11 @@ class ExtensionChecks(unittest.TestCase):
             fixture.start()
             self.assertTrue(session.connect("127.0.0.1", fixture.port)["connected"])
             self.assertTrue(fixture.attack_armed.wait(4))
-            factory = session.client.factory
+            client = session.client
             fixture.trigger_attack()
-            self.assertTrue(factory.closed.wait(4))
+            self.assertTrue(client.closed.wait(4))
             self.assertTrue(fixture.attack_sent.is_set())
-            self.assertEqual(factory.protocol_error, "clipboard_size_limit")
+            self.assertEqual(client.protocol_error, "clipboard_size_limit")
         finally:
             cleanup_errors = _close_loopback([fixture], [session])
         self.assertEqual(cleanup_errors, [])
@@ -625,29 +625,24 @@ class ExtensionChecks(unittest.TestCase):
             fixture.start()
             self.assertTrue(session.connect("127.0.0.1", fixture.port)["connected"])
             client = session.client
-            protocol = client.protocol
-            factory = client.factory
 
-            self.assertIs(factory.active_protocol, protocol)
-            self.assertEqual(protocol.screen.size, (1024, 768))
+            self.assertEqual((client.width, client.height), (1024, 768))
             self.assertTrue(fixture.client_caps_seen.wait(4))
             self.assertTrue(
-                _wait_until(lambda: factory.latest_clipboard == expected_remote, timeout=6)
+                _wait_until(lambda: client.latest_clipboard == expected_remote, timeout=6)
             )
-            self.assertEqual(factory.latest_clipboard, expected_remote)
+            self.assertEqual(client.latest_clipboard, expected_remote)
 
             session.clipboard_set(local_text)
             self.assertTrue(fixture.client_provide_seen.wait(4))
-            self.assertEqual(factory.ext_clipboard.local_text, local_text)
+            self.assertEqual(client.ext_clipboard.local_text, local_text)
 
             fixture._expected_disconnect = True
             session.disconnect()
-            self.assertTrue(factory.closed.wait(4))
-            self.assertIsNone(protocol.screen)
-            self.assertEqual(len(protocol._packet), 0)
-            self.assertIsNone(factory.active_protocol)
-            self.assertEqual(factory.latest_clipboard, "")
-            self.assertIsNone(factory.ext_clipboard.local_text)
+            self.assertTrue(client.closed.wait(4))
+            self.assertIsNone(client.screen)
+            self.assertEqual(client.latest_clipboard, "")
+            self.assertIsNone(client.ext_clipboard.local_text)
         finally:
             cleanup_errors = _close_loopback([fixture], [session])
         self.assertEqual(cleanup_errors, [])
@@ -664,7 +659,7 @@ class ExtensionChecks(unittest.TestCase):
             self.assertTrue(session.connect("127.0.0.1", fixture.port)["connected"])
             session.screenshot()
             self.assertTrue(fixture.client_caps_seen.wait(4))
-            self.assertTrue(session.client.factory.ext_clipboard.supported)
+            self.assertTrue(session.client.ext_clipboard.supported)
 
             started = time.monotonic()
             result = session.send_text(text, method="clipboard")
@@ -1176,11 +1171,14 @@ def _write_profile_files(
 
 def _fake_connected_session():
     session = _client.VNCSession()
-    factory = SimpleNamespace(
+    session.client = SimpleNamespace(
         closed=threading.Event(),
-        ext_clipboard=SimpleNamespace(supported=False),
+        ext_clipboard=_clipboard.ExtendedClipboard(),
+        clipboard_sent=threading.Event(),
+        latest_clipboard="",
+        clipboard_encoding="iso-8859-1",
+        protocol_error=None,
     )
-    session.client = SimpleNamespace(factory=factory)
     return session
 
 

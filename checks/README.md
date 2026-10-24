@@ -55,7 +55,7 @@
 
 该命令会操作真实来宾桌面，不能作为默认回归运行。JSON 报告按目标列出 `passed`、`failed` 和 `not_executed` 步骤；非零退出码表示失败或未完成。
 
-验收基础 VNC 路径时，使用未绑定 profile 的 VNC MCP，在真实系统应用或可取消的输入框中操作，以截图核对结果；逐键文字显式选择 `method="keys"`。`vnc_input_live.py` 的来宾读回是独立辅助验证。环境条件见 [支持范围](../docs/COMPATIBILITY.md)。
+验收基础 VNC 路径时，使用本项目 MCP 连接未绑定 profile 的 VNC 端点，在真实系统应用或可取消的输入框中操作，以截图核对结果；逐键文字显式选择 `method="keys"`。`vnc_input_live.py` 的来宾读回是独立辅助验证。环境条件见 [支持范围](../docs/COMPATIBILITY.md)。
 
 ## 测试窗口
 

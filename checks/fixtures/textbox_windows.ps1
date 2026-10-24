@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 $form = New-Object System.Windows.Forms.Form
-$form.Text = 'VNC MCP Unicode verification'
+$form.Text = 'VMware VNC Unicode verification'
 $form.Width = 1000
 $form.Height = 650
 $form.StartPosition = 'CenterScreen'

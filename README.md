@@ -102,4 +102,4 @@ CLI 每次命令独立连接并在结束后断开。连续多步任务使用 MCP
 
 [安装与接入](references/setup.md) · [接口参考](references/operations.md) · [画面条件](references/visual-waits.md) · [版本记录](CHANGELOG.md) · [贡献指南](CONTRIBUTING.md) · [反馈问题](https://github.com/OvOyezi/VMware_VNC/issues)
 
-采用 [Apache-2.0](LICENSE) 许可证，版权声明见 [NOTICE](NOTICE)。
+采用 [Apache-2.0](LICENSE) 许可证。

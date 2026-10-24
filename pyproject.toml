@@ -9,7 +9,7 @@ description = "MCP tools and an auxiliary CLI for reliable AI visual control of 
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
-license-files = ["LICENSE", "NOTICE"]
+license-files = ["LICENSE"]
 dependencies = [
   "mcp==1.30.0",
   "pillow==13.0.0",

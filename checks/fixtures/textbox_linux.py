@@ -12,7 +12,7 @@ import tkinter as tk
 
 result_path = Path(sys.argv[1])
 root = tk.Tk()
-root.title("VNC MCP Unicode verification")
+root.title("VMware VNC Unicode verification")
 root.geometry("1000x650+50+50")
 box = tk.Text(root, font=("Noto Sans CJK SC", 18), undo=True, wrap="word", insertontime=0)
 box.pack(fill="both", expand=True)

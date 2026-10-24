@@ -1476,7 +1476,7 @@ def _new_report(output: Path) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Explicit four-VM live input acceptance for the VNC MCP fixtures."
+        description="Explicit four-VM live input acceptance for the VMware VNC fixtures."
     )
     parser.add_argument("--manifest", type=Path, required=True,
                         help="JSON target manifest kept in .local")

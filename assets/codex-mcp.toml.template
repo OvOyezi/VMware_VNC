@@ -1,0 +1,10 @@
+# Generated for this installation. Select the target explicitly when connecting.
+[mcp_servers.vmware_vnc]
+command = {{PYTHON_COMMAND}}
+args = [{{ENTRY_POINT}}, "mcp"]
+cwd = {{PROJECT_ROOT}}
+
+[mcp_servers.vmware_vnc.env]
+VNC_TIMEOUT = "15"
+VNC_SCREENSHOT_MODE = "auto"
+VNC_ENCODING = "auto"

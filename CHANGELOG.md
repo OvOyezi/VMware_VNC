@@ -1,8 +1,8 @@
 # 版本记录
 
-## 0.5.0 · 未发布
+## 0.5.0 · 2026-10-24
 
-- 分发包与 CLI 更名为 `vmware-vnc`，Python 包更名为 `vmware_vnc`。`main.py mcp` 与 `vnc_*` 工具名保持可用；旧导入与可执行文件路径需更新。
+- 以 `vmware-vnc` 独立分发和维护，提供 Python 包 `vmware_vnc`、MCP stdio 服务与辅助 CLI。
 - MCP 与 CLI 统一使用应用层管理配置和会话，可选来宾 profile 按需加载。
 - 新增验证证书的 TLS 与 WebSocket／WSS 连接。
 - 修复分辨率变化后的坐标校验，以及分段首帧和 resize 画面的像素完整性。
@@ -15,9 +15,6 @@
 - Linux 输入验收窗口改用 GTK 原生控件绘制画布，避免缺少 Cairo 绑定时出现空白。
 - 改进断开、超时和取消时的任务与 I/O 线程清理。
 - MCP 配置生成新增通用 stdio 进程 JSON 输出；安装脚本继续面向 Windows。
-
-## 0.4.0 · 2026-10-23
-
 - 用项目自有的 asyncio RFB 传输取代运行时 vncdotool / Twisted；新增 Raw、CopyRect、Hextile、ZRLE 和 Tight 无损矩形解码，并拒绝 Tight JPEG。
 - 默认截图改为原生尺寸 RGB8 PNG，加入帧 ID、捕获时间、更新区域与源像素 SHA-256 元数据；`auto` 刷新失败时从短连接获取完整首帧。
 - 新增 `vnc_inspect` 与 CLI `inspect`，提供精确 RGB、参考差异、原生坐标映射、放大细节和可复用的最新帧检查；未新增 OCR 或视觉模型依赖。

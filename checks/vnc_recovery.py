@@ -552,7 +552,7 @@ class _McpStdio:
             text=True, encoding="utf-8", errors="replace", bufsize=1,
         )
         self.lines: queue.Queue[str | None] = queue.Queue()
-        self.reader = threading.Thread(target=self._read_stdout, name="vnc-mcp-stdio-reader", daemon=True)
+        self.reader = threading.Thread(target=self._read_stdout, name="vmware-vnc-stdio-reader", daemon=True)
         self.reader.start()
         self.request_id = 0
 

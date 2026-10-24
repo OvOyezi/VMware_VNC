@@ -18,6 +18,20 @@ pwsh -NoProfile -File "$projectRoot/scripts/Setup.ps1"
 
 Setup 在该目录创建或复用 `.venv`，按固定依赖安装，再以 editable 方式安装包。它不修改 AI 宿主配置、不连接 VNC，也不复制其他目录的环境。目录移动后重新运行 Setup；不要搬运现有 `.venv`。
 
+## 更新安装
+
+使用 Git 安装时，在实际安装目录拉取更新并重新运行 Setup：
+
+```powershell
+git -C "$projectRoot" pull --ff-only
+pwsh -NoProfile -File "$projectRoot/scripts/Setup.ps1"
+& "$projectRoot/.venv/Scripts/vmware-vnc.exe" --version
+```
+
+使用源码压缩包安装时，将新版解压到新的安装目录，在其中运行 Setup，再将 MCP 进程参数指向该目录。确认新版可用后移除旧安装；不复制旧环境，也不混合两版源码。
+
+更新后在 AI 宿主中重启 MCP 服务，调用 `vnc_diagnostics` 核对 `application.name` 为 `vmware-vnc`、`application.version` 与安装版本一致。CLI 的版本输出只验证磁盘安装，不能证明宿主已切换到新进程。
+
 ## 通用 MCP stdio 接入
 
 在所用 AI 宿主中注册本地 stdio 服务，由宿主启动并保持进程：
@@ -97,20 +111,3 @@ vnc_connect(url="wss://vnc.example.test:6080/websockify", session_id="proxy")
 URL 与 host／port／profile 互斥，禁止内嵌账号密码及 fragment。VNC URL 可省略端口（默认 5900），WS／WSS 默认 80／443；原生 host／port 形式仍要求明确端口。公开状态只返回传输类型、主机和端口，不包含代理路径或查询参数。`vnc+tls` 是 TLS 包裹的 RFB 字节流，不表示支持 VeNCrypt 或其他新增 RFB 安全类型。
 
 WebSocket 使用二进制子协议，可连接 websockify 等标准代理。项目不自带代理进程，也不将代理作为直接 VMware VNC 的前提。TLS／WSS 默认验证证书，可通过 `VNC_TLS_CA_FILE` 或 CLI `--tls-ca-file` 指定 CA；不存在关闭验证的配置。可选来宾 profile 只绑定原生 host／port，不能通过代理 URL 推断来宾身份。
-
-## 从旧包迁移
-
-0.5.0 的分发名称与命令行为 `vmware-vnc`，Python 导入包为 `vmware_vnc`。旧标识仅用于一次性迁移，不提供重复源码或旧包运行适配层。在确认旧 editable 包属于当前安装目录后，使用该目录的 `.venv` 卸载旧分发，并清除该项目原有的生成元数据，再运行 Setup：
-
-```powershell
-& "$projectRoot/.venv/Scripts/python.exe" -m pip show vnc-mcp
-# 确认 Editable project location 就是 $projectRoot 后继续。
-& "$projectRoot/.venv/Scripts/python.exe" -m pip uninstall vnc-mcp
-$legacyMetadata = Join-Path $projectRoot 'src/vnc_mcp.egg-info'
-if (Test-Path -LiteralPath $legacyMetadata) {
-    Remove-Item -LiteralPath $legacyMetadata -Recurse
-}
-pwsh -NoProfile -File "$projectRoot/scripts/Setup.ps1"
-```
-
-直接导入旧包的脚本和旧可执行文件路径需要更新。`main.py mcp` 和 `vnc_*` 工具名不变。安装本项目不会替换其他目录的环境、注册服务或全局配置。

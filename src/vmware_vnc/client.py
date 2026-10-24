@@ -17,7 +17,7 @@ from .keys import parse_key
 from .transport import Endpoint
 from .imaging import Screenshot, validate_encoding, validate_region
 from .operations import ActionCancelled, ActionControl, ActionTimedOut
-from .clipboard import validate_text
+from .clipboard import normalize_newlines, validate_text
 from .guest import GuestProfile, VmrunClipboard
 from .visual import VisualFrame, VisualReference, reference_from_file
 
@@ -582,13 +582,14 @@ class VNCSession:
 
     def _effective_key_delay(self, text: str, delay_ms: int) -> int:
         effective_delay_ms = max(delay_ms, MIN_KEY_EVENT_GAP_MS)
-        wire_length = len(text.replace("\r", ""))
+        normalized_text = normalize_newlines(text)
+        wire_length = len(normalized_text)
         if max(0, wire_length - 1) * effective_delay_ms / 1000 >= self.action_timeout:
             raise ValueError("effective typing gaps exceed the action time budget; send smaller chunks")
         # Validate the entire key path before a focus click or any text prefix
         # is sent. Newline and tab use their explicit RFB special-key mappings.
-        for character in text:
-            if character not in "\r\n\t":
+        for character in normalized_text:
+            if character not in "\n\t":
                 parse_key(character)
         return effective_delay_ms
 
@@ -596,7 +597,7 @@ class VNCSession:
         validate_text(text)
         if type(delay_ms) is not int or not 0 <= delay_ms <= 1000:
             raise ValueError("delay_ms must be between 0 and 1000")
-        wire_text = text.replace("\r", "")
+        wire_text = normalize_newlines(text)
         effective_delay_ms = self._effective_key_delay(text, delay_ms)
         with self._lock:
             self._require_display(self._require_client())

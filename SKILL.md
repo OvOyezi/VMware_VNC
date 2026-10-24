@@ -30,7 +30,7 @@ MCP 是 AI 连续交互的主要入口，可保留连接、会话和画面参考
 
 ## 文本与画面条件
 
-- `vnc_text`、`vnc_type` 与 CLI `text` / `type` 的 `auto` 只选已协商的 UTF-8 剪贴板或明确绑定的来宾 profile。两者都没有时，任何非空文本都在点击焦点和发送输入前拒绝；需要键盘事件时，先从截图确认目标控件和输入法，再显式选 `method="keys"`。逐键结果带 `input_method_sensitive=true`，`application_verified` 仍为 `false`；输入可能被输入法转换，必须截图核对应用结果。`delay_ms` 仅与显式 `method="keys"` 同用。
+- `vnc_text`、`vnc_type` 与 CLI `text` / `type` 的 `auto` 只选已协商的 UTF-8 剪贴板或明确绑定的来宾 profile。两者都没有时，任何非空文本都在点击焦点和发送输入前拒绝；需要键盘事件时，先点击目标控件，再截图确认该窗口的输入法（焦点切换可能切换输入法），然后显式选 `method="keys"`，通常不再传 `focus_x/focus_y`，避免再次点击。工具不会自动探测或切换来宾输入法。逐键结果带 `input_method_sensitive=true`，`application_verified` 仍为 `false`；输入可能被输入法转换，必须截图核对应用结果。`delay_ms` 仅与显式 `method="keys"` 同用。
 - Linux 来宾 profile 可选择 X11 或 Wayland 剪贴板后端。Wayland 只在 socket 明确且归属当前账号时使用；GNOME 原生 Wayland 的焦点限制尚未实测解决，显式使用 Xwayland 与现有 X11 剪贴板工具是兼容路径。配置见 [文本输入](references/text-input.md)。
 - 来宾辅助输入需要本次截图确认的 `focus_x/focus_y`。准备剪贴板后的点击会取消旧选区，替换内容前先明确清空。
 - 等待变化或匹配前，用 `vnc_screenshot(remember=true)` 保存参考；stable 使用自己的起始画面。参考生命周期、区域和容差见 [画面条件](references/visual-waits.md)。
@@ -40,6 +40,6 @@ MCP 是 AI 连续交互的主要入口，可保留连接、会话和画面参考
 
 ## 异常与维护
 
-失败、超时或取消的输入不自动重放；先检查当前画面与连接状态。若连接返回 `display_state="unavailable"`（例如 0×0 帧缓冲），显式调用 `vnc_wake(session_id, connection_id)` 或 CLI `wake`，再截图并检查新画面。wake 只发送两次指针移动，不点击、不按键、不解锁；`wake_sent` 只表示动作已发送，不能证明显示已恢复。0×0 resize 会使当前可用画面失效，截图不会返回旧图；普通非零 resize 的旧快照仍保留原尺寸，直到新画面完整。截图的 `auto` 模式会先在已有连接上尝试一次有界完整刷新，失败后用短暂共享连接取完整首帧；需要指定行为时仍可选 `refresh` 或 `fresh`。保持的按键、鼠标按钮及会话资源由断开清理。组合键必须完整释放，分辨率变化后重新截图并确认坐标。连接、刷新、输入和队列问题见 [故障排查](references/troubleshooting.md)。
+失败、超时或取消的输入不自动重放；先检查当前画面与连接状态。若连接返回 `display_state="unavailable"`（例如 0×0 帧缓冲），显式调用 `vnc_wake(session_id, connection_id)` 或 CLI `wake`，再截图并检查新画面。wake 只发送两次指针移动，不点击、不按键、不解锁；`wake_sent` 只表示动作已发送，不能证明显示已恢复。0×0 resize 会使当前可用画面失效，截图不会返回旧图；普通非零 resize 的旧快照仍保留原尺寸，直到新画面完整。截图的 `auto` 模式会先在已有连接上尝试一次有界完整刷新，失败后用短暂共享连接取完整首帧；需要指定行为时仍可选 `refresh` 或 `fresh`。保持的按键、鼠标按钮及会话资源由断开清理。Ctrl/Alt/Super 组合键中的 ASCII 字母大小写只是快捷键记法，不隐含 Shift；需要 Shift 时显式加入（如 `ctrl+shift+a`），独立 `A` 仍表示 Shift+A。组合键必须完整释放，分辨率变化后重新截图并确认坐标。连接、刷新、输入和队列问题见 [故障排查](references/troubleshooting.md)。
 
 环境要求与已知限制见 [支持范围](docs/COMPATIBILITY.md)，维护入口见 [贡献指南](CONTRIBUTING.md)。

@@ -47,7 +47,10 @@ INSTRUCTIONS = (
     'after 300 seconds by default; reconnect explicitly and inspect again. Use vnc_sessions for nonblocking '
     'inventory and vnc_status for current state. Use vnc_text or vnc_type for literal Unicode text: auto '
     'selects negotiated UTF-8 clipboard or an explicitly selected VMware guest profile. '
-    'Auto never falls back to keyboard events: inspect the target input mode and choose method=keys explicitly. '
+    'Auto never falls back to keyboard events. Before explicit method=keys, focus the intended control, '
+    'then screenshot and inspect that window\'s input mode: changing focus can change the IME. '
+    'Keyboard text also depends on the target layout and CapsLock; English IME mode alone does not establish letter case. '
+    'Ctrl/Alt/Super shortcut letters are case-insensitive; request Shift explicitly when needed. '
     'If the connected display is unavailable, vnc_wake sends pointer motion only; capture again afterward. '
     'Guest text requires focus_x/focus_y from the inspected screenshot; the focus click clears any existing text selection. A '
     'sent paste is not proof that the application accepted text. Never replay failed input automatically. Use '
@@ -96,7 +99,7 @@ def create_server(config: VNCConfig | None = None, *, application: VNCApplicatio
                        paste_key: Literal["ctrl-v", "ctrl-shift-v", "shift-insert", "meta-v"] = "ctrl-v",
                        connection_id: str | None = None, session_id: str = DEFAULT_SESSION,
                        focus_x: StrictInt | None = None, focus_y: StrictInt | None = None) -> dict:
-        """Submit literal text. Auto selects negotiated UTF-8 clipboard or a bound VMware guest profile, otherwise fails before input. Explicit method=keys requires visual confirmation of the target input mode; key events can be transformed by an IME. Guest text REQUIRES focus_x/focus_y from the inspected screenshot. Verify the application afterward."""
+        """Submit text. Auto selects negotiated UTF-8 clipboard or an explicitly bound guest profile, otherwise fails before input. For method=keys, focus the control first, then screenshot and confirm its input mode; an IME can transform keys. CRLF, CR and LF each produce one Enter. Guest text REQUIRES inspected focus_x/focus_y. Verify the application afterward."""
         return await _run("send_text", text, method, paste_key, focus_x, focus_y, session_id=session_id, connection_id=connection_id)
 
     @server.tool()
@@ -173,17 +176,17 @@ def create_server(config: VNCConfig | None = None, *, application: VNCApplicatio
 
     @server.tool()
     async def vnc_keypress(key: str, connection_id: str | None = None, session_id: str = DEFAULT_SESSION) -> dict:
-        """Press a key or chord, e.g. enter, ctrl-c, alt-tab, f5, or a."""
+        """Press a key or chord, e.g. enter, ctrl-c, alt-tab, f5, or a. Ctrl/Alt/Super ASCII shortcut letters ignore case: Ctrl+A equals ctrl+a; use ctrl+shift+a for Shift. Standalone A retains its implicit Shift."""
         return await _run("keypress", key, session_id=session_id, connection_id=connection_id)
 
     @server.tool()
     async def vnc_key_down(key: str, connection_id: str | None = None, session_id: str = DEFAULT_SESSION) -> dict:
-        """Hold a key down until vnc_key_up releases it."""
+        """Hold a key or complete chord until vnc_key_up releases it. Shortcut notation follows vnc_keypress; overlapping held keysyms are rejected."""
         return await _run("key_down", key, session_id=session_id, connection_id=connection_id)
 
     @server.tool()
     async def vnc_key_up(key: str, connection_id: str | None = None, session_id: str = DEFAULT_SESSION) -> dict:
-        """Release a key held with vnc_key_down."""
+        """Release the complete key or chord held with vnc_key_down; do not release one modifier from a held chord."""
         return await _run("key_up", key, session_id=session_id, connection_id=connection_id)
 
     @server.tool()
@@ -201,7 +204,7 @@ def create_server(config: VNCConfig | None = None, *, application: VNCApplicatio
                        method: Literal["auto", "keys", "clipboard", "guest"] = "auto",
                        paste_key: Literal["ctrl-v", "ctrl-shift-v", "shift-insert", "meta-v"] = "ctrl-v",
                        focus_x: StrictInt | None = None, focus_y: StrictInt | None = None) -> dict:
-        """Submit text through Unicode clipboard or a bound guest profile. Auto fails before input when neither exists. Explicit method=keys requires inspecting the input mode; delay_ms is only for explicit keys and raises the minimum 20ms gap. Verify the target application afterward."""
+        """Submit text through auto, clipboard, guest or explicit keys. Auto fails before input without negotiated UTF-8 clipboard or a bound guest profile. For keys, focus first, then screenshot and confirm the window's input mode; delay_ms raises the minimum 20ms gap. CRLF, CR and LF each produce one Enter. Submitted counts do not verify application content; inspect the result."""
         return await _run("send_text", text, method, paste_key, focus_x, focus_y, delay_ms,
                           session_id=session_id, connection_id=connection_id)
 

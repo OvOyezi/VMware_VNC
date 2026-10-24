@@ -19,6 +19,7 @@
 | vnc_fidelity.py | 经真实 MCP stdio 通道检查合成桌面画面采集与图像保真 |
 | vnc_frames.py | 分段首帧／resize、ROI、CopyRect 像素来源、快照与有界区域元数据 |
 | vnc_keys.py | 组合键规范化、别名、隐式修饰键和无效输入预检 |
+| vnc_keyboard.py | 换行与快捷键字母大小写、拒绝前无输入、动作预算、并发会话隔离及旧 ID 拒绝 |
 | vnc_transport.py | TCP／TLS／WS／WSS、本机证书验证、二进制流、取消排空与共享运行时清理 |
 | vnc_application.py | 应用／MCP 工厂隔离、配置边界、惰性 profile 与关闭状态 |
 | vnc_state.py | 真实 RFB 消息的分段帧、resize、CopyRect、组合键冲突、无效输入后恢复与资源释放 |

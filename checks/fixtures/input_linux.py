@@ -89,8 +89,25 @@ class GtkFixture:
         self.canvas_host.set_hexpand(True)
         self.canvas_host.set_vexpand(False)
         right.attach(self.canvas_host, 0, 1, 1, 1)
-        self.canvas = Gtk.DrawingArea()
+        self.canvas = Gtk.EventBox()
         self.canvas.set_size_request(330, 180)
+        self.canvas.set_visible_window(True)
+        self.canvas.get_style_context().add_class("vnc-input-canvas")
+        self.canvas_css_provider = Gtk.CssProvider()
+        self.canvas.get_style_context().add_provider(
+            self.canvas_css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+        self.canvas_label = Gtk.Label(label="DRAG THIS CANVAS")
+        self.canvas_label.set_halign(Gtk.Align.START)
+        self.canvas_label.set_valign(Gtk.Align.START)
+        self.canvas_label.set_margin_start(24)
+        self.canvas_label.set_margin_top(22)
+        self.canvas_label.get_style_context().add_class("vnc-input-canvas-label")
+        self.canvas_label.get_style_context().add_provider(
+            self.canvas_css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+        self.canvas.add(self.canvas_label)
+        self._update_canvas_style()
         self.canvas.add_events(
             Gdk.EventMask.BUTTON_PRESS_MASK
             | Gdk.EventMask.BUTTON_RELEASE_MASK
@@ -98,7 +115,6 @@ class GtkFixture:
             | Gdk.EventMask.KEY_PRESS_MASK
             | Gdk.EventMask.KEY_RELEASE_MASK
         )
-        self.canvas.connect("draw", self.on_canvas_draw)
         self.canvas.connect("size-allocate", self.on_canvas_allocate)
         self.canvas_host.put(self.canvas, self.canvas_xy[0], self.canvas_xy[1])
 
@@ -217,21 +233,19 @@ class GtkFixture:
     def on_toggle(self, _button):
         self.button_clicks += 1
         self.color = "red" if self.color == "green" else "green"
-        self.canvas.queue_draw()
+        self._update_canvas_style()
         self.write_report()
 
-    def on_canvas_draw(self, widget, context):
-        if self.color == "green":
-            context.set_source_rgb(0.08, 0.42, 0.18)
-        else:
-            context.set_source_rgb(0.72, 0.08, 0.10)
-        context.paint()
-        context.set_source_rgb(1.0, 1.0, 1.0)
-        context.select_font_face("Sans", 0, 0)
-        context.set_font_size(20)
-        context.move_to(24, 52)
-        context.show_text("DRAG THIS CANVAS")
-        return False
+    def _update_canvas_style(self):
+        background = (
+            "rgb(20, 107, 46)" if self.color == "green" else "rgb(184, 20, 26)"
+        )
+        css = (
+            ".vnc-input-canvas { background-color: " + background + "; }\n"
+            ".vnc-input-canvas-label { color: #ffffff; }"
+        )
+        self.canvas_css_provider.load_from_data(css.encode("utf-8"))
+        self.canvas.queue_draw()
 
     def on_canvas_allocate(self, _widget, _allocation):
         self.write_report()

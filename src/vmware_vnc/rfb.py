@@ -18,7 +18,7 @@ from uuid import uuid4
 
 from PIL import Image
 
-from .clipboard import ExtendedClipboard, MAX_CLIPBOARD_BYTES
+from .clipboard import ExtendedClipboard, MAX_CLIPBOARD_BYTES, normalize_newlines
 from .rfb_codec import FrameDecoder, PixelFormat, MAX_FRAME_PIXELS, MAX_RECT_BYTES
 from .frames import FrameBuffer, FrameSnapshot
 from .keys import keysyms
@@ -573,10 +573,9 @@ class RFBConnection:
         self._runtime.call(self._state.pointer(button=button, down=False), self.timeout)
 
     def type_batch(self, text: str, control: Any) -> None:
-        for char in text:
+        for char in normalize_newlines(text):
             control.check()
-            if char != "\r":
-                self.key_press("enter" if char == "\n" else "tab" if char == "\t" else char)
+            self.key_press("enter" if char == "\n" else "tab" if char == "\t" else char)
 
     def set_clipboard(self, text: str) -> None:
         self._runtime.call(self._state.set_clipboard(text, False), self.timeout)

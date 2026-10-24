@@ -63,7 +63,7 @@ MCP 会话默认 `screenshot_mode="auto"`：先在当前连接上做一次有界
 
 拖动在按下后等待 80 毫秒，再按直线发送最多 30 个移动位置，每步间隔 20 毫秒，到达终点后等待 80 毫秒并松开。移动期间持续检查取消和超时。
 
-`vnc_keypress` 和 `vnc_key_down` 按物理 keysym 拒绝与已保持按键重叠的组合键，包括大写字母的隐式 Shift。`vnc_key_up` 必须释放本会话按下的完整组合键；别名与修饰键顺序会规范化，不允许用单独 Ctrl 提前释放已保持的 Ctrl+A。分辨率变化后须重新截图，再使用新画面坐标。
+`vnc_keypress` 和 `vnc_key_down` 按 keysym 拒绝与已保持按键重叠的组合键。Ctrl/Alt/Super 组合中的 ASCII 字母大小写只是快捷键记法，例如 `Ctrl+A` 等同 `ctrl+a`，不会隐含 Shift；需要 Shift 时显式写 `ctrl+shift+a`。独立 `A` 仍表示 Shift+A，标点的既有映射不变。`vnc_key_up` 必须释放本会话按下的完整组合键；别名与修饰键顺序会规范化，不允许用单独 Ctrl 提前释放已保持的 Ctrl+A。分辨率变化后须重新截图，再使用新画面坐标。
 
 文字输入与来宾配置见 [text-input.md](text-input.md)。截图元数据包括 `capture_seconds`、`transport_bytes`、`wire_encoding`、`frame_id`、`frame_received_monotonic`、`updated_regions`、`capture_source`、`lossless` 和 `source_rgb_sha256`。`frame_received_monotonic` 来自单调时钟，只适合本进程计算帧龄。`source_rgb_sha256` 是将图像区域宽高按大端序打包后与 RGB 字节拼接计算的 SHA-256；它描述编码前的源像素，JPEG 输出仍是有损的。`capture_seconds` 是本次客户端捕获耗时，`transport_bytes` 是该阶段接收的 RFB 字节数；fresh 包含短截图连接握手，refresh 可能含同期通知。它们不代表应用响应时间或整个系统的带宽。
 

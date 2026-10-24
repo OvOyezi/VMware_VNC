@@ -11,7 +11,7 @@
 | guest | 使用绑定到当前 VNC 端点的 VMware profile 准备来宾剪贴板，校验并清理临时文件，再粘贴；必须提供截图中目标控件的 `focus_x/focus_y` |
 | keys | 显式发送 VNC 键盘事件，不调用剪贴板。按键如何映射成文字取决于服务端、目标应用和来宾当前输入法 |
 
-`auto` 没有可用剪贴板通道时不会点击焦点，也不会发送任何键盘事件。查看 `vnc_status` 的 capabilities 是否包含 `utf8_clipboard`、连接是否绑定 guest profile。需要纯键盘输入时，先截图确认目标控件和当前输入法，再显式调用 `method="keys"`；工具不会替你切换输入法。键盘结果带 `input_method_sensitive=true`，且 `application_verified` 为 `false`。按键事件可能被输入法转换，不能据此保证字面文本；必须再截图核对实际应用内容。
+`auto` 没有可用剪贴板通道时不会点击焦点，也不会发送任何键盘事件。查看 `vnc_status` 的 capabilities 是否包含 `utf8_clipboard`、连接是否绑定 guest profile。纯 VNC 键鼠操作不依赖来宾账号或 VMware Tools。需要纯键盘输入时，先点击目标控件，再截图确认该窗口的输入法（焦点切换可能切换输入法），然后显式调用 `method="keys"`；工具不会自动探测或切换来宾输入法，确认后通常省略 `focus_x/focus_y`，避免再次点击。键盘结果带 `input_method_sensitive=true`，且 `application_verified` 为 `false`。按键事件可能被输入法转换，不能据此保证字面文本；必须再截图核对实际应用内容。
 
 ```python
 # 若没有 UTF-8 协商或显式 guest profile，此调用会在输入前拒绝，不回退到按键。
@@ -19,9 +19,13 @@ vnc_text(text="中文与 emoji 😀", focus_x=300, focus_y=200,
          session_id="linux", connection_id="<本次 ID>")
 
 # 仅在截图确认焦点和输入法后显式使用键盘事件。
-vnc_type(text="已确认模式下的按键", method="keys", delay_ms=40,
+vnc_type(text="ASCII text after checking the input mode", method="keys", delay_ms=40,
          session_id="linux", connection_id="<本次 ID>")
 ```
+
+纯 VNC 输入中文可以使用目标系统已配置的输入法：先输入拼音，再截图查看并选择候选词。直接发送 Unicode keysym 不保证服务端生成对应字符。
+
+逐键输入还受目标键盘布局和 CapsLock 影响；英文输入模式不代表大小写一定正确。需要精确文字时，在可撤销的文本控件中先作短样本核对，或检查屏幕上的锁定键提示；不要向未知焦点或密码框试输。工具不会自动切换布局、输入法或锁定键。
 
 键盘事件至少间隔 20 毫秒；`vnc_type` 或 CLI `type` 的 `delay_ms` 只能与显式 `method="keys"` 一起使用。`method="auto"` 加 `delay_ms` 会在输入前拒绝，即使剪贴板通道可用。超出动作预算的键盘文字也会在点击焦点或发送按键前拒绝；按应用状态分段提交并逐段检查。
 
@@ -61,6 +65,6 @@ Linux 来宾需要 Python 3，并安装所选 backend 对应的剪贴板工具�
 
 服务启动时用 `VNC_PROFILES_FILE` 指向本机配置；`vnc_profiles()` 只列端点与通道信息。显式选择 profile 后，仍须重新截图确认目标，再提交文字。准备后点击会取消旧选区；替换内容前先明确清空。按键或鼠标按钮仍被按住时，文字提交会被拒绝。
 
-每次至多 100,000 字符，拒绝 NUL 和无效 Unicode surrogate；协议消息及解压内容各有 1 MiB 上限。Windows 辅助输入将换行规范为 CRLF，协议读回以 LF 表示。`submitted_characters` / 兼容字段 `typed_characters` 是提交数量；`clipboard_verified` 只证明剪贴板校验成功，`paste_sent` 只证明粘贴事件已发出，`application_verified` 固定为 false。请用新截图或应用自己的读回结果确认文本。
+每次至多 100,000 字符，拒绝 NUL 和无效 Unicode surrogate；协议消息及解压内容各有 1 MiB 上限。逐键输入将 CRLF、CR 和 LF 都视为一次 Enter；`submitted_characters` / 兼容字段 `typed_characters` 保持原提交文本的长度，只记录提交长度，不证明应用已收到文本。Windows 辅助输入仍将换行规范为 CRLF，协议读回以 LF 表示。`clipboard_verified` 只证明剪贴板校验成功，`paste_sent` 只证明粘贴事件已发出，`application_verified` 固定为 false。请用新截图或应用自己的读回结果确认文本。
 
 CLI `text` 和 `type` 都支持 `--method`、`--paste-key` 与 `--focus X Y`；`type --delay-ms N` 只可与 `--method keys` 搭配。准备、认证、清理、超时或取消失败时不自动重放输入；剪贴板可能已变化，键盘输入也可能部分送达，先观察当前状态再决定下一步。

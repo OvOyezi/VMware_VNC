@@ -2,10 +2,11 @@
 # Modified for VMware VNC.
 """Canonical keyboard chord parsing for RFB key events.
 
-Key chords are represented as physical X11/RFB keysyms. Uppercase ASCII and
+Key chords are represented as X11/RFB keysyms. Uppercase ASCII and
 the legacy shifted-punctuation set carry an implicit left Shift, matching
-VMware console behavior. Unicode characters are sent as Unicode keysyms
-directly; this module does not infer a guest keyboard layout.
+VMware console behavior. In Ctrl/Alt/Super shortcuts, ASCII letter case is
+notation: Shift must be explicit. Unicode characters are sent as Unicode
+keysyms directly; this module does not infer a guest keyboard layout.
 """
 from __future__ import annotations
 
@@ -59,6 +60,7 @@ _MODIFIER_ORDER = (
     "ctrl", "ctrl_r", "alt", "alt_r", "shift", "shift_r", "super", "super_r",
 )
 _MODIFIER_CODES = {KEYS[name] for name in _MODIFIER_ORDER}
+_SHORTCUT_MODIFIER_CODES = _MODIFIER_CODES - {KEYS["shift"], KEYS["shift_r"]}
 _MODIFIER_NAME_BY_CODE = {KEYS[name]: name for name in _MODIFIER_ORDER}
 _MODIFIER_RANK = {name: index for index, name in enumerate(_MODIFIER_ORDER)}
 _SHIFTED_ASCII = frozenset('~!@#$%^&*()_+{}|:"<>?')
@@ -69,7 +71,7 @@ _UNICODE_KEYS_PREFIX = 0x01000000
 class KeyChord:
     """An immutable, canonical sequence of keysym-down events.
 
-    ``components`` contains physical keysym values, so aliases and implicit
+    ``components`` contains keysym values, so aliases and implicit
     modifiers compare consistently when a caller checks held-key overlap.
     ``release_codes`` is the corresponding reverse key-up order.
     """
@@ -159,17 +161,23 @@ def _atom(value: str) -> _Atom:
 
 
 def parse_key(key: str) -> KeyChord:
-    """Parse a key name or +/- chord into canonical physical keysyms."""
+    """Parse a key name or +/- chord into canonical keysyms."""
     value = _validate_text(key)
     atoms = [_atom(part) for part in _split_chord(value)]
+    shortcut = any(atom.code in _SHORTCUT_MODIFIER_CODES for atom in atoms)
 
     modifiers: dict[int, str] = {}
     nonmodifiers: list[_Atom] = []
     nonmodifier_codes: set[int] = set()
     needs_shift = False
     for atom in atoms:
+        # Ctrl+A conventionally names the same shortcut as Ctrl+a. Literal
+        # uppercase text still uses Shift, and Ctrl+Shift+A stays explicit.
+        if shortcut and len(atom.name) == 1 and "A" <= atom.name <= "Z":
+            lowered = atom.name.lower()
+            atom = _Atom(lowered, ord(lowered))
         if atom.code in _MODIFIER_CODES:
-            # Modifier aliases can map to the same physical keysym.
+            # Modifier aliases can map to the same keysym.
             modifiers.setdefault(atom.code, _MODIFIER_NAME_BY_CODE[atom.code])
         else:
             if atom.code in nonmodifier_codes:
@@ -196,7 +204,7 @@ def parse_key(key: str) -> KeyChord:
     )
     # The shifted character itself already names its implicit left Shift.
     # Hiding that redundant modifier also makes `A` and `shift+A` canonicalize
-    # to the same name as well as the same physical keysym sequence.
+    # to the same name as well as the same keysym sequence.
     hidden_shift = (
         needs_shift
         and KEYS["shift"] in modifiers

@@ -32,9 +32,14 @@ def validate_text(text: str) -> None:
         raise ValueError("text contains an invalid Unicode surrogate") from exc
 
 
+def normalize_newlines(text: str) -> str:
+    """Use one LF for CRLF, CR and LF without changing other characters."""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def wire_text(text: str) -> bytes:
     validate_text(text)
-    return text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n").encode("utf-8") + b"\0"
+    return normalize_newlines(text).replace("\n", "\r\n").encode("utf-8") + b"\0"
 
 
 def message(flags: int, data: bytes = b"") -> bytes:

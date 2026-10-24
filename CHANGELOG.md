@@ -10,6 +10,9 @@
 - 新增 `vnc_wake` 与 CLI `wake`，通过指针移动尝试恢复显示。无完整画面时报告显示不可用；截图超时使旧帧与参考失效。
 - Linux 来宾剪贴板新增 X11／Wayland 后端选择和 `wayland_display` 配置，失败后清理子进程，不切换后端重发。
 - 统一组合键解析与参数校验，避免按键冲突和无效文字导致部分提交。
+- Ctrl、Alt、Super 快捷键中的 ASCII 字母不再因大写记法隐式加入 Shift；`Ctrl+A` 与 `ctrl+a` 等效，需要 Shift 时显式指定。
+- 修复逐键输入丢弃独立 CR 换行的问题；CRLF、CR、LF 均发送一次 Enter，输入预算按规范化后的按键数量预检。
+- Linux 输入验收窗口改用 GTK 原生控件绘制画布，避免缺少 Cairo 绑定时出现空白。
 - 改进断开、超时和取消时的任务与 I/O 线程清理。
 - MCP 配置生成新增通用 stdio 进程 JSON 输出；安装脚本继续面向 Windows。
 

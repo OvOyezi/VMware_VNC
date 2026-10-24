@@ -24,6 +24,7 @@ $checks = @(
     @{ Name = 'fidelity'; Script = 'vnc_fidelity.py' },
     @{ Name = 'frames'; Script = 'vnc_frames.py' },
     @{ Name = 'keys'; Script = 'vnc_keys.py' },
+    @{ Name = 'keyboard'; Script = 'vnc_keyboard.py' },
     @{ Name = 'transport'; Script = 'vnc_transport.py' },
     @{ Name = 'application'; Script = 'vnc_application.py' },
     @{ Name = 'state'; Script = 'vnc_state.py' },

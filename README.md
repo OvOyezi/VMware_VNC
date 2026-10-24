@@ -2,13 +2,14 @@
 
 **让 AI 看见并操作 VMware 虚拟机。**
 
+[![正式版](https://img.shields.io/badge/release-v1.0.0-brightgreen)](https://github.com/OvOyezi/VMware_VNC/releases/tag/v1.0.0)
 [![checks](https://github.com/OvOyezi/VMware_VNC/actions/workflows/checks.yml/badge.svg)](https://github.com/OvOyezi/VMware_VNC/actions/workflows/checks.yml)
 
 通过 MCP，把虚拟机桌面交给 AI 编程助手：查看真实画面、操作应用、等待界面变化，再核对执行结果。适合需要图形界面的软件操作、界面检查和多虚拟机任务。
 
 核心工作方式很直接：**观察画面 → 执行操作 → 等待变化 → 核对结果**。AI 根据每一步的新画面继续工作；VMware VNC 提供截图、输入、画面条件和会话管理工具。
 
-[快速开始](#快速开始) · [使用示例](#开始使用) · [接口参考](references/operations.md) · [支持范围](docs/COMPATIBILITY.md)
+[下载正式版](https://github.com/OvOyezi/VMware_VNC/releases/tag/v1.0.0) · [快速开始](#快速开始) · [使用示例](#开始使用) · [接口参考](references/operations.md) · [支持范围](docs/COMPATIBILITY.md)
 
 ## 能帮你做什么
 

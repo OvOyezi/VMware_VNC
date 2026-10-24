@@ -1,5 +1,10 @@
 # 版本记录
 
+## 1.0.0 · 2026-10-24
+
+- 发布首个正式版，统一运行时与 Python 包版本，包元数据标记为 Production/Stable。
+- 提供正式版源码包与 Python wheel，MCP 主入口与 CLI 辅助入口继续共享同一套核心能力。
+
 ## 0.5.0 · 2026-10-24
 
 - 以 `vmware-vnc` 独立分发和维护，提供 Python 包 `vmware_vnc`、MCP stdio 服务与辅助 CLI。

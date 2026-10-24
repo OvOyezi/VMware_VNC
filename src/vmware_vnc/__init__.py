@@ -2,4 +2,4 @@
 # Modified for VMware VNC.
 """VNC desktop controls over the project-owned asyncio RFB core."""
 
-__version__ = "0.5.0"
+__version__ = "1.0.0"

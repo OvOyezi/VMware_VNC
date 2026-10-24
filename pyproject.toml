@@ -4,12 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vmware-vnc"
-version = "0.5.0"
+version = "1.0.0"
 description = "MCP tools and an auxiliary CLI for reliable AI visual control of VMware virtual machines"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
+classifiers = ["Development Status :: 5 - Production/Stable"]
 dependencies = [
   "mcp==1.30.0",
   "pillow==13.0.0",

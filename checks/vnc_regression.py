@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import traceback
+import zlib
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -95,8 +96,13 @@ class Peer(socketserver.BaseRequestHandler):
                             frame.extend(value.to_bytes(bpp // 8, "big" if endian else "little"))
                     self.request.sendall(b"\x00\x00\x00\x01" + struct.pack(">HHHHi", x0, y0, width, height, 0) + frame)
                     if not clipboard_sent:
-                        text = (owner.name + " clipboard").encode()
-                        self.request.sendall(b"\x03\x00\x00\x00" + struct.pack(">I", len(text)) + text)
+                        if owner.extended_clipboard:
+                            flags = 0x01000000 | 0x02000000 | 0x08000000 | 0x10000000 | 1
+                            data = struct.pack("!II", flags, 1024 * 1024)
+                            self.request.sendall(b"\x03\x00\x00\x00" + struct.pack(">i", -len(data)) + data)
+                        else:
+                            text = (owner.name + " clipboard").encode()
+                            self.request.sendall(b"\x03\x00\x00\x00" + struct.pack(">I", len(text)) + text)
                         clipboard_sent = True
                 elif message == 4:
                     down, key = struct.unpack(">B2xI", self.read(7))
@@ -106,7 +112,20 @@ class Peer(socketserver.BaseRequestHandler):
                     mask, x, y = struct.unpack(">BHH", self.read(5))
                     owner.events.append(("pointer", mask, x, y))
                 elif message == 6:
-                    self.read(struct.unpack(">3xI", self.read(7))[0])
+                    length, = struct.unpack(">3xi", self.read(7))
+                    data = self.read(abs(length))
+                    owner.clipboard_messages.append((length, data))
+                    if length < 0:
+                        flags, = struct.unpack_from("!I", data)
+                        action = flags & 0xFF000000
+                        if action == 0x08000000:
+                            requested = struct.pack("!I", 0x02000000 | 1)
+                            self.request.sendall(b"\x03\x00\x00\x00" + struct.pack(">i", -len(requested)) + requested)
+                        elif action == 0x10000000:
+                            raw = zlib.decompress(data[4:])
+                            size, = struct.unpack_from("!I", raw)
+                            assert len(raw) == size + 4
+                            owner.provided_wire_texts.append(raw[4:])
                 else:
                     raise AssertionError(f"Unexpected RFB message {message}")
         except (EOFError, OSError):
@@ -119,12 +138,14 @@ class Peer(socketserver.BaseRequestHandler):
 
 
 class Fixture:
-    def __init__(self, name, color, password=None, honor_regions=False):
+    def __init__(self, name, color, password=None, honor_regions=False, extended_clipboard=False):
         self.name, self.color = name, color
         self.password = password
         self.silent = self.closed = False
         self.events, self.key_event_times, self.errors = [], [], []
         self.honor_regions = honor_regions
+        self.extended_clipboard = extended_clipboard
+        self.clipboard_messages, self.provided_wire_texts = [], []
         self.framebuffer_requests = []
         self.connections = set()
         self.accepted = 0

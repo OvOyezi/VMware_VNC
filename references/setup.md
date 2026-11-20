@@ -90,7 +90,7 @@ pwsh -NoProfile -File "$projectRoot/scripts/Get-McpConfig.ps1"
 | VNC_URL | 无 | 可选 vnc／vnc+tls／ws／wss 默认目标，与 VNC_HOST／VNC_PORT 互斥 |
 | VNC_TLS_CA_FILE | 系统信任库 | TLS／WSS 的可选 CA 文件；验证证书与主机名，不跳过验证 |
 | VNC_PASSWORD_ENV | VNC_PASSWORD | 服务进程读取的密码环境变量名 |
-| VNC_PROFILES_FILE | 无 | 显式来宾 profile TOML 路径；配置方法见 text-input.md |
+| VNC_PROFILES_FILE | Windows 可读取已存在的 `%LOCALAPPDATA%/vmware-vnc/profiles.toml` | 显式路径优先，设为空字符串可关闭默认发现。连接时按名称选择 profile，凭据配置见 text-input.md |
 | VNC_VMRUN_PATH | 自动发现 | 可选的官方 vmrun 可执行文件路径 |
 
 认证需要时，在启动 MCP 的本机环境中提供对应变量，或使用宿主支持的环境变量转发。变量值不能提交 Git。密码变化后须确认服务进程实际获得新环境；不要在聊天中回显凭据。

@@ -66,7 +66,7 @@ MULTI_STEPS = (
 
 REQUIRED_TOOLS = {
     "vnc_connect", "vnc_screenshot", "vnc_click", "vnc_move", "vnc_drag",
-    "vnc_scroll", "vnc_keypress", "vnc_key_down", "vnc_key_up", "vnc_type",
+    "vnc_scroll", "vnc_keypress", "vnc_key_down", "vnc_key_up", "vnc_type", "vnc_type_keys",
     "vnc_wait_for", "vnc_disconnect", "vnc_sessions",
 }
 
@@ -187,12 +187,13 @@ class VmrunResultReader:
         self.result_path = (ntpath if profile.guest_os == "windows" else posixpath).normpath(result_path)
         self.destination = destination
         self.secrets = secrets
-        for variable in (profile.username_env, profile.password_env, profile.vm_password_env):
-            if variable is not None and variable not in os.environ:
-                raise ValueError("required credential environment variable is not set: " + variable)
-        self.username = os.environ[profile.username_env]
-        self.password = os.environ[profile.password_env]
+        self.username, self.password = profile.guest_credentials()
+        if profile.vm_password_env is not None and profile.vm_password_env not in os.environ:
+            raise ValueError("required credential environment variable is not set: " + profile.vm_password_env)
         self.vm_password = os.environ.get(profile.vm_password_env, "") if profile.vm_password_env else ""
+        self.secrets.extend(value for value in (self.username, self.password, self.vm_password)
+                            if value and value not in self.secrets)
+        self.secrets.sort(key=len, reverse=True)
         executable = profile.vmrun or get_diagnostics()["vmrun"].get("path")
         if not executable or not Path(executable).is_file():
             raise ValueError("official vmrun executable is unavailable for profile " + profile.name)
@@ -877,9 +878,8 @@ class LiveInputDriver:
         before = await self.read_fixture(state)
         focus = self._center(before["controls"]["text"])
         expected = "123-456-7890"
-        response = await self._call("vnc_type", {
-            "text": expected, "method": "keys", "focus_x": focus[0], "focus_y": focus[1],
-        }, state)
+        await self._call("vnc_click", {"x": focus[0], "y": focus[1]}, state)
+        response = await self._call("vnc_type_keys", {"text": expected}, state)
         if response.get("transport") != "keys" or response.get("paste_sent") is not False:
             raise AcceptanceError("explicit keyboard text used a clipboard transport")
         after = await self.wait_fixture(
@@ -956,12 +956,17 @@ class LiveInputDriver:
     async def test_unicode(self, state: TargetRun) -> dict[str, Any]:
         before = await self.read_fixture(state)
         focus = self._center(before["controls"]["text"])
-        expected = "中文输入 {} 😀\n第二行 café".format(state.spec.name)
+        expected = (f"中文输入 {state.spec.name} 😀\n"
+                    r"""$r = Join-Path $env:TEMP '中文 A+B'; "$r" | Write-Output # `$ \n \u4e2d café""")
         response = await self._call("vnc_type", {
             "text": expected, "method": "auto", "focus_x": focus[0], "focus_y": focus[1],
         }, state)
-        if response.get("clipboard_verified") is not True:
-            raise AcceptanceError("Unicode auto transport did not report clipboard_verified=true")
+        transport = response.get("transport")
+        if transport == "guest":
+            if response.get("clipboard_verified") is not True:
+                raise AcceptanceError("guest clipboard verification missing")
+        elif transport != "clipboard" or response.get("encoding") != "utf-8":
+            raise AcceptanceError("Unicode auto input did not use a literal text transport")
         if response.get("paste_sent") is not True:
             raise AcceptanceError("Unicode auto transport did not report paste_sent=true")
         if response.get("application_verified") is not False:
@@ -979,7 +984,7 @@ class LiveInputDriver:
             "expected_text": expected,
             "observed_text": observed,
             "fixture_readback_verified": observed == expected,
-            "clipboard_verified": response["clipboard_verified"],
+            "clipboard_verified": response.get("clipboard_verified"),
             "paste_sent": response["paste_sent"],
             "application_verified": response["application_verified"],
             "transport": response.get("transport"),
@@ -1481,7 +1486,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--manifest", type=Path, required=True,
                         help="JSON target manifest kept in .local")
     parser.add_argument("--profiles-file", type=Path, required=True,
-                        help="TOML guest profiles; credentials are named environment variables")
+                        help="TOML guest profiles; credentials use environment variables or Windows Credential Manager")
     parser.add_argument("--output", type=Path, required=True,
                         help="JSON report path; PNG screenshots are written beside it")
     parser.add_argument("--allow-live", action="store_true", required=True,

@@ -1,35 +1,86 @@
 # 中文与 Unicode 文本
 
-`vnc_text`、`vnc_type` 和 CLI `text` / `type` 共用 `send_text`。连接后先检查完整截图和输入控件；具名调用始终携带 `session_id`、`connection_id`。若连接仍在但 `display_state="unavailable"`，不能据旧画面继续输入；可尝试显式 `vnc_wake`，再截图确认完整新帧。未完成的首帧不会作为可用截图返回。
+连接后先检查完整截图和输入控件。具名输入与画面检查都须携带 `session_id`、`connection_id`。
 
-## 自动通道与显式键盘
+| 任务 | 接口 |
+| --- | --- |
+| 把命令、路径或一段文字原样交给应用 | `vnc_text` / CLI `text`。先看连接的 `capabilities.literal_text_transport` |
+| 判断物理敲键会受到哪些输入状态影响 | `vnc_inspect(keyboard_fields=[...])` / CLI `inspect --keyboard-field ...`。按字段直读，需要时查看同一张图 |
+| 模拟普通打字、拼音选词，或在已知控件中输入 Unicode 码位 | `vnc_type_keys` / CLI `type-keys`。确认焦点和输入模式后可一次发送整段 |
+
+## 原样输入文字
+
+命令、文件路径、代码和中英文混排都使用同一个文字接口。以 PowerShell 为例，美元符号、反引号、引号和反斜杠均作为数据传输。通过 CLI 提交包含宿主 shell 特殊字符的文字时，可用 `text --text-file <UTF-8 文件>` 保留原文。
 
 | method | 行为与条件 |
 | --- | --- |
-| auto | 只选择已协商的 VNC UTF-8 Extended Clipboard，或当前连接显式绑定的 guest profile。两者都没有时，任何非空文本（包括 ASCII）都在点击焦点或发送输入前拒绝；不会退回按键 |
-| clipboard | 通过 VNC 剪贴板发送，再按 `paste_key` 粘贴；要求协商 UTF-8 扩展，缺少扩展时只接受 Latin-1 |
-| guest | 使用绑定到当前 VNC 端点的 VMware profile 准备来宾剪贴板，校验并清理临时文件，再粘贴；必须提供截图中目标控件的 `focus_x/focus_y` |
-| keys | 显式发送 VNC 键盘事件，不调用剪贴板。按键如何映射成文字取决于服务端、目标应用和来宾当前输入法 |
+| auto | 优先使用协商的 UTF-8 Extended Clipboard，其次使用当前连接明确绑定的来宾 profile |
+| clipboard | 仅使用已协商的 UTF-8 Extended Clipboard |
+| guest | 使用绑定到当前 VNC 端点的来宾 profile 准备剪贴板，校验内容并清理临时文件，随后点击截图中指定的 `focus_x/focus_y` 并粘贴 |
 
-`auto` 没有可用剪贴板通道时不会点击焦点，也不会发送任何键盘事件。查看 `vnc_status` 的 capabilities 是否包含 `utf8_clipboard`、连接是否绑定 guest profile。纯 VNC 键鼠操作不依赖来宾账号或 VMware Tools。需要纯键盘输入时，先点击目标控件，再截图确认该窗口的输入法（焦点切换可能切换输入法），然后显式调用 `method="keys"`；工具不会自动探测或切换来宾输入法，确认后通常省略 `focus_x/focus_y`，避免再次点击。键盘结果带 `input_method_sensitive=true`，且 `application_verified` 为 `false`。按键事件可能被输入法转换，不能据此保证字面文本；必须再截图核对实际应用内容。
+连接和 `vnc_status` 返回的 `capabilities.literal_text_transport` 为 `clipboard`、`guest` 或 `null`。值为 `null` 时，非空文字会在点击或按键前被拒绝。若目标支持本文的控件码位输入，可显式改用键盘。若已配置来宾通道，也可通过 `vnc_profiles()` 选择与端点匹配的 profile。部分 VMware 端点会忽略基础 VNC 的 Latin-1 ClientCutText。
 
 ```python
-# 若没有 UTF-8 协商或显式 guest profile，此调用会在输入前拒绝，不回退到按键。
-vnc_text(text="中文与 emoji 😀", focus_x=300, focus_y=200,
-         session_id="linux", connection_id="<本次 ID>")
-
-# 仅在截图确认焦点和输入法后显式使用键盘事件。
-vnc_type(text="ASCII text after checking the input mode", method="keys", delay_ms=40,
-         session_id="linux", connection_id="<本次 ID>")
+vnc_connect(profile="windows-guest", session_id="work")
+vnc_screenshot(session_id="work", connection_id="<本次 ID>")
+vnc_text(text=r"""$r = Join-Path $env:TEMP '中文 A+B'; $r | Write-Output""",
+         focus_x=300, focus_y=200, session_id="work", connection_id="<本次 ID>")
 ```
 
-纯 VNC 输入中文可以使用目标系统已配置的输入法：先输入拼音，再截图查看并选择候选词。直接发送 Unicode keysym 不保证服务端生成对应字符。
+## 模拟敲键
 
-逐键输入还受目标键盘布局和 CapsLock 影响；英文输入模式不代表大小写一定正确。需要精确文字时，在可撤销的文本控件中先作短样本核对，或检查屏幕上的锁定键提示；不要向未知焦点或密码框试输。工具不会自动切换布局、输入法或锁定键。
+`vnc_type_keys` 和 CLI `type-keys` 只发送普通 RFB 键盘事件。焦点与输入条件确认后，整段可在一次调用中发送，结束后核对结果。焦点变化或出现候选框时再观察。
 
-键盘事件至少间隔 20 毫秒；`vnc_type` 或 CLI `type` 的 `delay_ms` 只能与显式 `method="keys"` 一起使用。`method="auto"` 加 `delay_ms` 会在输入前拒绝，即使剪贴板通道可用。超出动作预算的键盘文字也会在点击焦点或发送按键前拒绝；按应用状态分段提交并逐段检查。
+| `entry_mode` | 按键行为 | 适用条件 |
+| --- | --- | --- |
+| `direct`（默认） | 按提交字符发送键符。CRLF、CR、LF 各按一次回车 | 拼音选词、物理键盘测试或已知输入模式下的普通敲键 |
+| `richedit-hex` | 每个字符输入 4 至 6 位十六进制，选中刚输入的数字，再按 Alt+X | 已聚焦、支持十六进制转换的 RichEdit 控件，如 Windows 10 写字板 |
+| `gtk-hex` | 每个字符依次发送 Ctrl+Shift+U、十六进制、回车 | 已确认支持 GTK 码位输入的控件。其他控件可能把回车当作提交 |
 
-使用逐键输入时始终显式指定 `method="keys"`。通道要求见 [支持范围](../docs/COMPATIBILITY.md)。
+码位输入要求 ASCII 数字和 A 至 F 能直接进入控件。大小写都能表示同一个十六进制数字。两种码位方式都拒绝 C0/C1 和 DEL 控制字符。模式由调用方选择，保持当前输入法。`delay_ms`（CLI `--delay-ms`）可增加逐键间隔，最小间隔为 20 毫秒。预估展开后的按键超出动作预算时，整批在第一个键前被拒绝。输入中断后先检查已有内容。
+
+```python
+vnc_type_keys(text="A4F中文+7，$", entry_mode="richedit-hex",
+              session_id="work", connection_id="<本次 ID>")
+```
+
+协议依据与控件行为见 [Windows RichEdit 说明](https://learn.microsoft.com/en-us/windows/win32/intl/hextounicode-ime) 和 [GTK 数字输入说明](https://docs.gtk.org/gtk4/class.IMContextSimple.html)。迁移已有脚本时，将模拟敲键用的 `method="keys"` 改为 `vnc_type_keys`。
+
+### 检查键盘和输入法状态
+
+`vnc_status` 可在已有连接上读取 `keyboard_state.leds`。端点尚未报告时为 `null`。收到报告后，`source` 给出 `vmware` 或 `qemu`，三个锁定键各有一个布尔值。本连接发送锁定键后会作废旧报告，直到端点再次上报。服务端的报告可能略晚于实际按键。[VMware LED State](https://github.com/rfbproto/rfbproto/blob/master/rfbproto.rst#vmware-led-state-pseudo-encoding) · [QEMU LED State](https://www.qemu.org/docs/master/interop/vnc-ledstate-pseudo-encoding.html)
+
+需要决定下一步如何敲键时，可在一次 `vnc_inspect` 中列出关心的字段。锁定键可选 `caps_lock`、`num_lock`、`scroll_lock`。输入法名称、输入模式、全半角、正在组合或选词分别使用 `ime_name`、`ime_mode`、`character_width`、`composition`。
+
+```python
+vnc_inspect(keyboard_fields=["caps_lock", "ime_mode"],
+            region=indicator_region, session_id="work", connection_id="<本次 ID>")
+```
+
+`indicator_region` 是从该桌面确认的输入法指示区域，包含 `x`、`y`、`width`、`height`。也可省略区域以查看全桌面。全部字段可直读时，结果仅包含数据。有待确认字段时，调用最多返回一张原色 PNG。`keyboard.fields` 记录端点报告的值和来源，`keyboard.unresolved_fields` 列出仍需判断的字段，`keyboard.visual_evidence` 标明是否有可查看的图。明确提供 `frame_id` 时，图片表示那一帧的状态。
+
+查看当前输入法指示、全半角标识或候选窗口，只判断图中清晰显示的项目。布局缩写或没有看到候选框都不足以确定中英文模式。在 Windows 10 写字板里切换搜狗的“中”和“英”时，实测三盏灯均保持关闭。如果只有 Caps Lock 是前置条件，可以直接在 `vnc_type_keys` 指定 `expect_caps_lock=False`（CLI `--expect-caps-lock off`）。报告缺失或不符时会停止发送。
+
+### 在已有的 PowerShell 窗口传递数据
+
+已确认 PowerShell 提示符和英文直输时，可以在宿主把原文转为 UTF-8 Base64，再把下面生成的 ASCII 表达式作为一段按键发往窗口。表达式只校验并显示数据，适用于要把文字交给目标 shell 的任务。
+
+```python
+import base64
+import hashlib
+
+data = "中文 A+B，$".encode("utf-8")
+payload = base64.b64encode(data).decode("ascii")
+digest = hashlib.sha256(data).hexdigest()
+line = (
+    f"$b=[Convert]::FromBase64String('{payload}');"
+    "$h=[BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($b)).Replace('-','');"
+    f"if($h -eq '{digest}'){{[Text.Encoding]::UTF8.GetString($b)}}else{{throw 'SHA-256 mismatch'}}"
+)
+vnc_type_keys(text=line, session_id="work", connection_id="<本次 ID>")
+```
+
+任务需要运行该表达式时，再发送回车。读取本地变量、显示输出和按下回车都发生在当前 PowerShell 窗口里。
 
 ## 标准 VNC 剪贴板
 
@@ -61,10 +112,12 @@ Wayland 调用 `wl-copy` 与 `wl-paste` 时显式使用相同的 `text/plain;cha
 
 GNOME 原生 Wayland 焦点策略仍是外部限制，当前新后端尚未完成 VMware 实机验收，不能据此宣称所有 Wayland 桌面都可用。需要复用现有工具的兼容路径时，可明确设置 Xwayland `display`，选择 `clipboard_backend="x11"` 并安装 xclip/xsel；仍须在目标应用中核对粘贴效果。
 
-Linux 来宾需要 Python 3，并安装所选 backend 对应的剪贴板工具。X11 还需正确的 display 和必要的 xauthority。Windows 来宾的 `guest_temp_dir` 必须是已登录用户可读写的目录；系统服务临时目录可能无法由交互桌面读取。`username_env`、`password_env` 和可选 `vm_password_env` 只填写环境变量名，真实凭据由启动 MCP/CLI 的本机环境提供。
+Linux 来宾需要 Python 3，并安装所选 backend 对应的剪贴板工具。X11 还需正确的 display 和必要的 xauthority。Windows 来宾的 `guest_temp_dir` 应指向已登录用户可读写的临时目录。
 
-服务启动时用 `VNC_PROFILES_FILE` 指向本机配置；`vnc_profiles()` 只列端点与通道信息。显式选择 profile 后，仍须重新截图确认目标，再提交文字。准备后点击会取消旧选区；替换内容前先明确清空。按键或鼠标按钮仍被按住时，文字提交会被拒绝。
+凭据可由 `username_env` 和 `password_env` 指定的环境变量提供。在 Windows 宿主上，也可以打开“凭据管理器 → Windows 凭据 → 添加普通凭据”，填写目标名（例如 `vmware-vnc/windows-guest`）、来宾账号与密码。在对应 profile 中填写 `windows_credential_target = "vmware-vnc/windows-guest"` 并移除两个环境变量字段。只有实际准备来宾剪贴板时才读取该条凭据。加密虚拟机可另用 `vm_password_env` 指定虚拟机密码的环境变量名。
 
-每次至多 100,000 字符，拒绝 NUL 和无效 Unicode surrogate；协议消息及解压内容各有 1 MiB 上限。逐键输入将 CRLF、CR 和 LF 都视为一次 Enter；`submitted_characters` / 兼容字段 `typed_characters` 保持原提交文本的长度，只记录提交长度，不证明应用已收到文本。Windows 辅助输入仍将换行规范为 CRLF，协议读回以 LF 表示。`clipboard_verified` 只证明剪贴板校验成功，`paste_sent` 只证明粘贴事件已发出，`application_verified` 固定为 false。请用新截图或应用自己的读回结果确认文本。
+将配置放在 Windows 宿主的 `%LOCALAPPDATA%/vmware-vnc/profiles.toml`，或用 `VNC_PROFILES_FILE` 显式指定文件。重新启动 MCP 后，`vnc_profiles()` 可列出目标。显式选择 profile 后，仍须重新截图确认目标，再提交文字。准备后点击会取消旧选区；替换内容前先明确清空。按键或鼠标按钮仍被按住时，文字提交会被拒绝。
 
-CLI `text` 和 `type` 都支持 `--method`、`--paste-key` 与 `--focus X Y`；`type --delay-ms N` 只可与 `--method keys` 搭配。准备、认证、清理、超时或取消失败时不自动重放输入；剪贴板可能已变化，键盘输入也可能部分送达，先观察当前状态再决定下一步。
+每次至多 100,000 字符，拒绝 NUL 和无效 Unicode surrogate；协议消息及解压内容各有 1 MiB 上限。`submitted_characters` / 兼容字段 `typed_characters` 保持原提交文本的长度，只记录提交长度，不证明应用已收到文本。Windows 辅助输入仍将换行规范为 CRLF，协议读回以 LF 表示。`clipboard_verified` 只证明剪贴板校验成功，`paste_sent` 只证明粘贴事件已发出，`application_verified` 固定为 false。请用新截图或应用自己的读回结果确认文本。
+
+CLI `text` 和 `type` 都支持 `--text-file`、`--method`、`--paste-key` 与 `--focus X Y`。准备、认证、清理、超时或取消失败时不自动重放输入；剪贴板可能已变化，键盘输入也可能部分送达，先观察当前状态再决定下一步。

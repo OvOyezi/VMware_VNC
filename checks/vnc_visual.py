@@ -843,55 +843,17 @@ def _load_modules(source_root: Path) -> None:
     _operations = importlib.import_module("vmware_vnc.operations")
 
 
-class EvidenceTextTestResult(unittest.TextTestResult):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.failure_details = []
-
-    def _record_failure(self, test, err, subtest=None):
-        exception_type, exception, _ = err
-        detail = {
-            "test": test.id(),
-            "exception_type": f"{exception_type.__module__}.{exception_type.__qualname__}",
-            "message": str(exception),
-            "traceback": self._exc_info_to_string(err, test),
-        }
-        if subtest is not None:
-            detail["subtest"] = str(subtest)
-        self.failure_details.append(detail)
-
-    def addFailure(self, test, err):
-        self._record_failure(test, err)
-        super().addFailure(test, err)
-
-    def addError(self, test, err):
-        self._record_failure(test, err)
-        super().addError(test, err)
-
-    def addSubTest(self, test, subtest, err):
-        if err is not None:
-            self._record_failure(test, err, subtest)
-        super().addSubTest(test, subtest, err)
-
-
 def _run_checks() -> dict[str, object]:
+    if __package__:
+        from ._unittest_report import run_cases
+    else:
+        from _unittest_report import run_cases
+
     global _integration_checks, _server_stderr
     _integration_checks = {name: False for name in _INTEGRATION_CHECK_NAMES}
     _server_stderr = ""
-    unit_suite = unittest.defaultTestLoader.loadTestsFromTestCase(VisualComparisonChecks)
-    registry_suite = unittest.defaultTestLoader.loadTestsFromTestCase(VisualRegistryChecks)
-    integration_suite = unittest.defaultTestLoader.loadTestsFromTestCase(VisualMcpIntegrationChecks)
-    tests = list(unit_suite) + list(registry_suite) + list(integration_suite)
-    suite = unittest.TestSuite([unit_suite, registry_suite, integration_suite])
     output = io.StringIO()
-    result = unittest.TextTestRunner(
-        stream=output, verbosity=2, resultclass=EvidenceTextTestResult
-    ).run(suite)
-    failed_ids = {detail["test"] for detail in result.failure_details}
-    checks = {
-        test.id().rsplit(".", 1)[-1].removeprefix("test_"): test.id() not in failed_ids
-        for test in tests
-    }
+    checks, result = run_cases(VisualComparisonChecks, VisualRegistryChecks, VisualMcpIntegrationChecks, stream=output)
     checks.update(_integration_checks)
     report: dict[str, object] = {
         "success": result.wasSuccessful() and all(checks.values()),

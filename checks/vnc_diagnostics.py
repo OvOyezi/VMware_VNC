@@ -5,7 +5,6 @@ import argparse
 import importlib
 import io
 import json
-import os
 from pathlib import Path
 import sys
 import tempfile
@@ -108,18 +107,13 @@ def _load_diagnostics(source_root: Path):
 
 
 def _run_checks() -> dict[str, object]:
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(DiagnosticsChecks)
-    tests = list(suite)
+    if __package__:
+        from ._unittest_report import run_cases
+    else:
+        from _unittest_report import run_cases
+
     output = io.StringIO()
-    result = unittest.TextTestRunner(stream=output, verbosity=2).run(suite)
-    failed_ids = {
-        test.id()
-        for test, _ in (*result.failures, *result.errors)
-    }
-    checks = {
-        test.id().rsplit(".", 1)[-1].removeprefix("test_"): test.id() not in failed_ids
-        for test in tests
-    }
+    checks, result = run_cases(DiagnosticsChecks, stream=output)
     report = {"success": result.wasSuccessful(), "checks": checks}
     if not result.wasSuccessful():
         report["details"] = output.getvalue()

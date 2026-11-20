@@ -13,15 +13,18 @@ from typing import Any
 from uuid import uuid4
 
 from .rfb import FramebufferUnavailable, RFBConnection
-from .keys import parse_key
+from .keys import codepoint_key_strokes, parse_key
 from .transport import Endpoint
 from .imaging import Screenshot, validate_encoding, validate_region
+from .inspection import InspectionResult, KeyboardField, inspect_frame, keyboard_report
 from .operations import ActionCancelled, ActionControl, ActionTimedOut
 from .clipboard import normalize_newlines, validate_text
 from .guest import GuestProfile, VmrunClipboard
 from .visual import VisualFrame, VisualReference, reference_from_file
 
 MIN_KEY_EVENT_GAP_MS = 20
+KEY_EVENT_HOLD_SECONDS = 0.08
+_MOUSE_BUTTONS = {"left": 1, "middle": 2, "right": 3}
 
 
 class VNCSession:
@@ -58,7 +61,7 @@ class VNCSession:
         self._display_unavailable = False
         self._lock = threading.RLock()
         self._held_keys: set[str] = set()
-        self._held_buttons: set[str | int] = set()
+        self._held_buttons: set[int] = set()
 
     def connect(self, host: str = "", port: int = 0, password: str | None = None,
                 profile: GuestProfile | None = None, url: str | None = None) -> dict[str, Any]:
@@ -149,7 +152,9 @@ class VNCSession:
                 "height": self.height,
                 "display_state": "ready" if available else "unavailable" if self.client else "disconnected",
                 "guest_profile": self.guest_profile.name if self.guest_profile else None,
+                "keyboard_state": {"ime_mode": None, "leds": getattr(self.client, "keyboard_leds", None)},
                 "capabilities": {
+                    "literal_text_transport": self._literal_text_transport(),
                     "utf8_clipboard": bool(self.client and self.client.ext_clipboard.supported),
                     "guest_text": self.guest_profile is not None,
                     "preferred_encoding": self.network_encoding,
@@ -160,6 +165,11 @@ class VNCSession:
                     "continuous_updates": bool(self.client and self.client.continuous_supported),
                 },
             }
+
+    def _literal_text_transport(self) -> str | None:
+        if self.client is not None and self.client.ext_clipboard.supported:
+            return "clipboard"
+        return "guest" if self.guest_profile is not None else None
 
     def _display_available(self, client: RFBConnection) -> bool:
         return not self._display_unavailable and (getattr(client, "framebuffer_available", True) is not False
@@ -283,19 +293,24 @@ class VNCSession:
     def inspect(self, region: tuple[int, int, int, int] | None = None,
                 reference_id: str | None = None, points: list[tuple[int, int]] | None = None,
                 detail_region: tuple[int, int, int, int] | None = None,
-                zoom: int = 4, pixel_threshold: int = 0, frame_id: str | None = None):
-        from .inspection import inspect_frame
+                zoom: int = 4, pixel_threshold: int = 0, frame_id: str | None = None,
+                keyboard_fields: list[KeyboardField] | None = None) -> InspectionResult:
         with self._lock:
-            self._require_display(self._require_client())
-            if frame_id is not None:
-                frame = self._last_visual_frame
-                if frame is None or frame.frame_id != frame_id:
-                    raise ValueError("unknown or expired frame_id; capture and inspect the intended frame again")
+            client = self._require_client()
+            if keyboard_fields is not None:
+                if (reference_id is not None or points is not None or detail_region is not None or
+                        type(zoom) is not int or zoom != 4 or type(pixel_threshold) is not int or pixel_threshold != 0):
+                    raise ValueError("keyboard_fields cannot be combined with pixel inspection options")
+                result, frame = self._inspect_keyboard(client, keyboard_fields, region, frame_id)
+                if frame is None:
+                    return result
+                reference = None
             else:
-                frame = self._capture_frame(region)
-            selected = frame.crop(region).require_bounded()
-            reference = self.visual_reference(reference_id, selected.region) if reference_id else None
-            result = inspect_frame(selected, reference, points, detail_region, zoom, pixel_threshold)
+                self._require_display(client)
+                frame = self._pinned_inspection_frame(frame_id) if frame_id is not None else self._capture_frame(region)
+                selected = frame.crop(region).require_bounded()
+                reference = self.visual_reference(reference_id, selected.region) if reference_id else None
+                result = inspect_frame(selected, reference, points, detail_region, zoom, pixel_threshold)
             result.details.update(frame_id=frame.frame_id, frame_received_monotonic=frame.received_at,
                                   connection_id=self.connection_id, capture_source=frame.capture_source,
                                   reference_frame_id=reference.frame_id if reference else None,
@@ -309,6 +324,44 @@ class VNCSession:
                                             capture_source=source.capture_source, display_scale=mapping["scale"],
                                             color_semantics=mapping["color_semantics"])))
             return replace(result, images=images)
+
+    def _pinned_inspection_frame(self, frame_id: str) -> VisualFrame:
+        frame = self._last_visual_frame
+        if frame is None or frame.frame_id != frame_id:
+            raise ValueError("unknown or expired frame_id; capture and inspect the intended frame again")
+        return frame
+
+    def _inspect_keyboard(self, client: RFBConnection, fields: list[KeyboardField],
+                          region: tuple[int, int, int, int] | None,
+                          frame_id: str | None) -> tuple[InspectionResult, VisualFrame | None]:
+        keyboard = keyboard_report(fields, getattr(client, "keyboard_leds", None))
+        frame = None
+        if frame_id is not None:
+            if not self._display_available(client):
+                self._invalidate_display()
+            frame = self._pinned_inspection_frame(frame_id)
+        if keyboard["unresolved_fields"]:
+            try:
+                if frame is None:
+                    self._require_display(client)
+                    frame = self._capture_frame(region)
+            except FramebufferUnavailable:
+                if self._control is not None:
+                    self._control.check()
+                self._require_client()
+                reason = "framebuffer_unavailable"
+            else:
+                keyboard["visual_evidence"] = {
+                    "available": True, "frame_id": frame.frame_id,
+                    "instruction": "Use only unambiguous indicators visible in this image. Leave other requested values unknown.",
+                }
+                result = InspectionResult.original_frame(frame.crop(region))
+                result.details["keyboard"] = keyboard
+                return result, frame
+        else:
+            reason = "all_fields_reported"
+        keyboard["visual_evidence"] = {"available": False, "reason": reason}
+        return InspectionResult([], {"keyboard": keyboard, "connection_id": self.connection_id, "image_metadata": {}}), None
 
     def _capture_frame(self, region: tuple[int, int, int, int] | None = None) -> VisualFrame:
         try:
@@ -422,34 +475,23 @@ class VNCSession:
 
 
     @staticmethod
-    def _button_number(button: str | int) -> int:
-        if isinstance(button, int):
-            return button
-        return {"left": 1, "middle": 2, "right": 3}[button]
-
-    def _mouse_button_is_held(self, button: str | int) -> bool:
-        number = self._button_number(button)
-        return any(self._button_number(held) == number for held in self._held_buttons)
-
-    def _discard_mouse_button(self, button: str | int) -> None:
-        number = self._button_number(button)
-        matches = [held for held in self._held_buttons if self._button_number(held) == number]
-        self._held_buttons.difference_update(matches)
+    def _button_number(button: str) -> int:
+        if button not in _MOUSE_BUTTONS:
+            raise ValueError("button must be left, middle, or right")
+        return _MOUSE_BUTTONS[button]
 
     def click(self, x: int, y: int, button: str = "left", count: int = 1) -> dict[str, Any]:
-        buttons = {"left": 1, "middle": 2, "right": 3}
-        if button not in buttons:
-            raise ValueError("button must be left, middle, or right")
+        number = self._button_number(button)
         if type(count) is not int or not 1 <= count <= 3:
             raise ValueError("count must be between 1 and 3")
         with self._lock:
             self._check_point(x, y)
-            if self._mouse_button_is_held(button):
+            if number in self._held_buttons:
                 raise ValueError("cannot click a mouse button that is already held; release it first")
             with self._input_action() as control:
                 self._position_pointer(x, y, control)
                 for index in range(count):
-                    self._pulse("mouse_down", buttons[button], "mouse_up", self._held_buttons, control)
+                    self._pulse("mouse_down", number, "mouse_up", self._held_buttons, control)
                     if index + 1 < count:
                         control.wait(0.04)
             return {"clicked": button, "count": count, "x": x, "y": y}
@@ -461,20 +503,18 @@ class VNCSession:
             return {"moved": True, "x": x, "y": y}
 
     def drag(self, x1: int, y1: int, x2: int, y2: int, button: str = "left") -> dict[str, Any]:
-        buttons = {"left": 1, "middle": 2, "right": 3}
-        if button not in buttons:
-            raise ValueError("button must be left, middle, or right")
+        number = self._button_number(button)
         with self._lock:
             self._check_point(x1, y1)
             self._check_point(x2, y2)
-            if self._mouse_button_is_held(button):
+            if number in self._held_buttons:
                 raise ValueError("cannot drag with a mouse button that is already held; release it first")
             distance = max(abs(x2 - x1), abs(y2 - y1))
             steps = min(30, distance)
             with self._input_action() as control:
                 self._position_pointer(x1, y1, control)
-                self._held_buttons.add(button)
-                self._call("mouse_down", buttons[button])
+                self._held_buttons.add(number)
+                self._call("mouse_down", number)
                 control.wait(0.08)
                 for index in range(1, steps + 1):
                     control.check()
@@ -487,8 +527,8 @@ class VNCSession:
                     self._call("mouse_move", x, y)
                     control.wait(0.02)
                 control.wait(0.08)
-                self._call("mouse_up", buttons[button])
-                self._discard_mouse_button(button)
+                self._call("mouse_up", number)
+                self._held_buttons.discard(number)
             return {"dragged": button, "from": [x1, y1], "to": [x2, y2]}
 
     def scroll(self, x: int, y: int, direction: str, amount: int = 1) -> dict[str, Any]:
@@ -525,7 +565,7 @@ class VNCSession:
                control: ActionControl) -> None:
         held.add(value)
         self._call(down_method, value)
-        control.wait(0.08)
+        control.wait(KEY_EVENT_HOLD_SECONDS)
         self._call(up_method, value)
         held.discard(value)
 
@@ -555,33 +595,44 @@ class VNCSession:
 
 
     def mouse_down(self, x: int, y: int, button: str = "left") -> dict[str, Any]:
-        buttons = {"left": 1, "middle": 2, "right": 3}
-        if button not in buttons:
-            raise ValueError("button must be left, middle, or right")
+        number = self._button_number(button)
         with self._lock:
             self._check_point(x, y)
-            if self._mouse_button_is_held(button):
+            if number in self._held_buttons:
                 raise ValueError("mouse button is already held; release it first")
             with self._input_action() as control:
                 self._position_pointer(x, y, control)
-                self._held_buttons.add(button)
-                self._call("mouse_down", buttons[button])
+                self._held_buttons.add(number)
+                self._call("mouse_down", number)
             return {"mouse_down": button, "x": x, "y": y}
 
     def mouse_up(self, x: int, y: int, button: str = "left") -> dict[str, Any]:
-        buttons = {"left": 1, "middle": 2, "right": 3}
-        if button not in buttons:
-            raise ValueError("button must be left, middle, or right")
+        number = self._button_number(button)
         with self._lock:
             self._check_point(x, y)
             with self._input_action() as control:
                 self._position_pointer(x, y, control)
-                self._call("mouse_up", buttons[button])
-                self._discard_mouse_button(button)
+                self._call("mouse_up", number)
+                self._held_buttons.discard(number)
             return {"mouse_up": button, "x": x, "y": y}
 
-    def _effective_key_delay(self, text: str, delay_ms: int) -> int:
+    def _effective_key_delay(self, text: str, delay_ms: int, entry_mode: str = "direct") -> int:
         effective_delay_ms = max(delay_ms, MIN_KEY_EVENT_GAP_MS)
+        if entry_mode != "direct":
+            key_strokes = chord_strokes = 0
+            for key in codepoint_key_strokes(text, entry_mode):
+                key_strokes += 1
+                if len(key) > 1:
+                    chord_strokes += 1
+            minimum_seconds = (max(0, key_strokes - 1) * effective_delay_ms / 1000
+                               + chord_strokes * KEY_EVENT_HOLD_SECONDS)
+            budget = self.action_timeout
+            if self._control is not None:
+                self._control.check()
+                budget = min(budget, self._control.deadline - time.monotonic())
+            if minimum_seconds >= budget:
+                raise ValueError("expanded typing strokes exceed the action time budget; send smaller chunks")
+            return effective_delay_ms
         normalized_text = normalize_newlines(text)
         wire_length = len(normalized_text)
         if max(0, wire_length - 1) * effective_delay_ms / 1000 >= self.action_timeout:
@@ -593,30 +644,77 @@ class VNCSession:
                 parse_key(character)
         return effective_delay_ms
 
-    def type_text(self, text: str, delay_ms: int = 0) -> dict[str, Any]:
+    def _check_caps_lock(self, expected: bool | None, *, partial: bool = False) -> None:
+        if expected is None:
+            return
+        leds = getattr(self._require_client(), "keyboard_leds", None)
+        reported = leds.get("caps_lock") if isinstance(leds, dict) else None
+        if type(reported) is bool and reported is expected:
+            return
+        if type(reported) is bool:
+            reason = (f"last RFB keyboard LED report says Caps Lock is {'on' if reported else 'off'}; "
+                      f"expected {'on' if expected else 'off'}")
+        else:
+            reason = "Caps Lock guard requires a last RFB keyboard LED report"
+        outcome = "input may be partial; do not replay automatically" if partial else "no input was sent"
+        raise ValueError(f"{reason}; {outcome}")
+
+    def type_text(self, text: str, delay_ms: int = 0, entry_mode: str = "direct",
+                  expect_caps_lock: bool | None = None) -> dict[str, Any]:
+        """Emit physical keys to the focused control, subject to its layout and IME."""
         validate_text(text)
         if type(delay_ms) is not int or not 0 <= delay_ms <= 1000:
             raise ValueError("delay_ms must be between 0 and 1000")
-        wire_text = normalize_newlines(text)
-        effective_delay_ms = self._effective_key_delay(text, delay_ms)
+        if entry_mode not in ("direct", "richedit-hex", "gtk-hex"):
+            raise ValueError("entry_mode must be direct, richedit-hex or gtk-hex")
+        if expect_caps_lock is not None and type(expect_caps_lock) is not bool:
+            raise ValueError("expect_caps_lock must be true, false or null")
+        wire_text = normalize_newlines(text) if entry_mode == "direct" else text
         with self._lock:
+            effective_delay_ms = self._effective_key_delay(text, delay_ms, entry_mode)
             self._require_display(self._require_client())
             if self._held_keys or self._held_buttons:
-                raise ValueError("release held keys and mouse buttons before typing literal text")
-            control = self._control or ActionControl(time.monotonic() + self.action_timeout)
-            try:
-                for index, char in enumerate(wire_text):
+                raise ValueError("release held keys and mouse buttons before typing key events")
+            self._check_caps_lock(expect_caps_lock)
+            key_strokes = 0
+            if entry_mode == "direct":
+                control = self._control or ActionControl(time.monotonic() + self.action_timeout)
+                try:
+                    for index, char in enumerate(wire_text):
+                        control.check()
+                        self._check_caps_lock(expect_caps_lock, partial=index > 0)
+                        self._call("type_batch", char, control)
+                        if index + 1 < len(wire_text):
+                            control.wait(effective_delay_ms / 1000.0)
                     control.check()
-                    self._call("type_batch", char, control)
-                    if index + 1 < len(wire_text):
-                        control.wait(effective_delay_ms / 1000.0)
-                control.check()
-            except (ActionCancelled, ActionTimedOut):
-                self.disconnect()
-                raise
-            return {"typed_characters": len(text), "effective_key_delay_ms": effective_delay_ms}
+                    self._check_caps_lock(expect_caps_lock, partial=bool(wire_text))
+                except (ActionCancelled, ActionTimedOut):
+                    self.disconnect()
+                    raise
+            else:
+                with self._input_action() as control:
+                    for key in codepoint_key_strokes(text, entry_mode):
+                        if key_strokes:
+                            control.wait(effective_delay_ms / 1000.0)
+                        control.check()
+                        if self._held_keys or self._held_buttons:
+                            raise ValueError("release held keys and mouse buttons before typing key events")
+                        self._check_caps_lock(expect_caps_lock, partial=key_strokes > 0)
+                        if len(key) == 1:
+                            self._call("type_batch", key, control)
+                        else:
+                            self._pulse("key_down", key, "key_up", self._held_keys, control)
+                        key_strokes += 1
+                    control.check()
+                    self._check_caps_lock(expect_caps_lock, partial=key_strokes > 0)
+            result = {"submitted_characters": len(text), "typed_characters": len(text),
+                      "effective_key_delay_ms": effective_delay_ms, "transport": "keys",
+                      "input_method_sensitive": True, "paste_sent": False, "application_verified": False}
+            if entry_mode != "direct":
+                result.update(entry_mode=entry_mode, key_strokes=key_strokes)
+            return result
 
-    def clipboard_set(self, text: str) -> dict[str, Any]:
+    def clipboard_set(self, text: str, *, require_utf8: bool = False) -> dict[str, Any]:
         validate_text(text)
         with self._lock:
             client = self._require_client()
@@ -627,6 +725,9 @@ class VNCSession:
                 # the very Ctrl+V that causes Request -> Provide.
                 return {"clipboard_characters": len(text), "encoding": "utf-8", "clipboard_offered": True,
                         "clipboard_data_sent": client.clipboard_sent.is_set(), "application_verified": False}
+            if require_utf8:
+                raise ValueError("literal paste requires a negotiated UTF-8 clipboard; "
+                                 "connect with a matching guest profile and use method=auto or guest")
             try:
                 text.encode("iso-8859-1")
             except UnicodeEncodeError as exc:
@@ -643,14 +744,11 @@ class VNCSession:
     def send_text(self, text: str, method: str = "auto", paste_key: str = "ctrl-v",
                   focus_x: int | None = None, focus_y: int | None = None, delay_ms: int = 0) -> dict[str, Any]:
         validate_text(text)
-        if not isinstance(delay_ms, int) or isinstance(delay_ms, bool) or not 0 <= delay_ms <= 1000:
-            raise ValueError("delay_ms must be an integer between 0 and 1000")
-        if delay_ms and method not in {"auto", "keys"}:
-            raise ValueError("delay_ms is available only for key events")
-        if delay_ms and method == "auto":
-            raise ValueError("delayed key events require explicit method=keys after checking the target input mode")
-        if method not in {"auto", "keys", "clipboard", "guest"}:
-            raise ValueError("text method must be auto, keys, clipboard or guest")
+        if method == "keys" or type(delay_ms) is not int or delay_ms != 0:
+            raise ValueError("literal text cannot use keyboard events or a typing delay; "
+                             "intentional physical typing uses vnc_type_keys or CLI type-keys")
+        if method not in {"auto", "clipboard", "guest"}:
+            raise ValueError("text method must be auto, clipboard or guest")
         if paste_key not in {"ctrl-v", "ctrl-shift-v", "shift-insert", "meta-v"}:
             raise ValueError("paste_key must be ctrl-v, ctrl-shift-v, shift-insert or meta-v")
         if (focus_x is None) != (focus_y is None):
@@ -663,29 +761,16 @@ class VNCSession:
                 self._check_point(focus_x, focus_y)
             if self._held_keys or self._held_buttons:
                 raise ValueError("release held keys and mouse buttons before submitting literal text")
-            selected = "keys" if delay_ms else method
-            if selected == "auto":
-                selected = "clipboard" if client.ext_clipboard.supported else "guest" if self.guest_profile else "unavailable"
-                if selected == "unavailable" and text:
-                    raise ValueError("automatic text needs a negotiated UTF-8 clipboard or an explicit guest profile; inspect the target input mode and select method=keys explicitly for keyboard events; no input was sent")
+            selected = (self._literal_text_transport() or "unavailable") if method == "auto" else method
             result = {"submitted_characters": len(text), "typed_characters": len(text), "transport": selected, "paste_sent": False,
                       "application_verified": False}
             if not text:
                 return result
-            if selected == "keys":
-                effective_delay_ms = self._effective_key_delay(text, delay_ms)
-                result["effective_key_delay_ms"] = effective_delay_ms
-                result["input_method_sensitive"] = True
+            if selected == "unavailable":
+                raise ValueError("no literal text channel: use a server with negotiated UTF-8 clipboard, "
+                                 "or list profiles and reconnect with the matching guest profile; no input was sent")
+            self._require_display(client)
             control = self._control or ActionControl(time.monotonic() + self.action_timeout)
-            if selected == "keys":
-                if focus_x is not None:
-                    self.click(focus_x, focus_y)
-                    control.wait(0.15)
-                if delay_ms:
-                    self.type_text(text, delay_ms)
-                else:
-                    self.type_text(text)
-                return result
             if selected == "guest":
                 profile = self.guest_profile
                 if profile is None or not profile.matches(self.host or "", self.port or 0):
@@ -697,8 +782,7 @@ class VNCSession:
                     raise ValueError("guest text requires focus_x and focus_y from the inspected screenshot to restore the intended input control")
                 result.update(VmrunClipboard(profile).prepare_clipboard(text, control))
             else:
-                # Unicode failure is detected before sending any clipboard bytes.
-                result.update(self.clipboard_set(text))
+                result.update(self.clipboard_set(text, require_utf8=True))
             control.check()
             if focus_x is not None:
                 self.click(focus_x, focus_y)
@@ -709,7 +793,7 @@ class VNCSession:
                 control.wait(0.15)
             self.keypress(paste_key)
             result["paste_sent"] = True
-            if selected == "clipboard" and client.ext_clipboard.supported:
+            if selected == "clipboard":
                 until = min(control.deadline, time.monotonic() + 0.5)
                 while not client.clipboard_sent.is_set() and time.monotonic() < until:
                     control.wait(min(0.02, max(0, until - time.monotonic())))

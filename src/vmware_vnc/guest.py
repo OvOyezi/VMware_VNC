@@ -13,6 +13,7 @@ from pathlib import Path
 import posixpath
 import re
 import subprocess
+import sys
 import tempfile
 import time
 import tomllib
@@ -31,21 +32,72 @@ class GuestProfile:
     vmx: str
     guest_os: str
     guest_temp_dir: str
-    username_env: str
-    password_env: str
+    username_env: str | None = None
+    password_env: str | None = None
     vm_password_env: str | None = None
     vmrun: str | None = None
     display: str | None = None
     xauthority: str | None = None
     clipboard_backend: str = "auto"
     wayland_display: str | None = None
+    windows_credential_target: str | None = None
 
     def matches(self, host: str, port: int) -> bool:
         return self.host.casefold() == host.casefold() and self.port == port
 
     def public(self) -> dict:
         return {"profile": self.name, "host": self.host, "port": self.port, "guest_os": self.guest_os,
-                "text_transport": "official_vmrun", "credentials": "environment_variables"}
+                "text_transport": "official_vmrun", "credentials": (
+                    "windows_credential_manager" if self.windows_credential_target is not None else "environment_variables"
+                )}
+
+    def _validate_credential_settings(self) -> None:
+        if self.windows_credential_target is not None:
+            if self.username_env is not None or self.password_env is not None:
+                raise ValueError("windows_credential_target cannot be combined with username_env or password_env")
+            if (not isinstance(self.windows_credential_target, str) or not self.windows_credential_target
+                    or any(c in self.windows_credential_target for c in "\0\r\n")):
+                raise ValueError("windows_credential_target must be a nonempty single-line string")
+        elif self.username_env is None or self.password_env is None:
+            raise ValueError("guest credentials require both username_env and password_env, or windows_credential_target")
+        for variable in (self.username_env, self.password_env, self.vm_password_env):
+            if variable is not None and (not isinstance(variable, str)
+                                         or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", variable)):
+                raise ValueError("credential environment variable name is invalid")
+
+    def guest_credentials(self) -> tuple[str, str]:
+        self._validate_credential_settings()
+        if self.windows_credential_target is None:
+            for key in (self.username_env, self.password_env):
+                if key not in os.environ:
+                    raise ValueError(f"required credential environment variable {key!r} is not set")
+            username, password = os.environ[self.username_env], os.environ[self.password_env]
+            if not username:
+                raise ValueError("guest username must not be empty")
+            return username, password
+        if sys.platform != "win32":
+            raise RuntimeError("windows_credential_target requires a Windows host")
+        try:
+            import win32cred
+        except (ImportError, OSError):
+            raise RuntimeError("Windows Credential Manager requires the Windows pywin32 dependency") from None
+        try:
+            credential = win32cred.CredRead(self.windows_credential_target, win32cred.CRED_TYPE_GENERIC, 0)
+        except Exception:
+            raise RuntimeError("Windows Credential Manager credential could not be read") from None
+        if not isinstance(credential, dict):
+            raise RuntimeError("Windows Credential Manager returned an invalid credential")
+        username, blob = credential.get("UserName"), credential.get("CredentialBlob")
+        if (not isinstance(username, str) or not username or any(c in username for c in "\0\r\n")
+                or not isinstance(blob, bytes)):
+            raise RuntimeError("Windows Credential Manager credential requires a username and UTF-16LE password blob")
+        try:
+            password = blob.decode("utf-16-le")
+        except UnicodeError:
+            raise RuntimeError("Windows Credential Manager password blob must contain valid UTF-16LE") from None
+        if "\0" in password:
+            raise RuntimeError("Windows Credential Manager password must not contain NUL characters")
+        return username, password
 
 
 def load_profiles(path: str | None = None) -> dict[str, GuestProfile]:
@@ -72,9 +124,10 @@ def load_profiles(path: str | None = None) -> dict[str, GuestProfile]:
             profile = GuestProfile(name=name, **fields)
         except TypeError as exc:
             raise ValueError(f"missing or invalid settings in guest profile {name!r}") from exc
-        required_strings = (profile.host, profile.vmx, profile.guest_temp_dir, profile.username_env, profile.password_env)
+        required_strings = (profile.host, profile.vmx, profile.guest_temp_dir)
         if any(not isinstance(value, str) or not value or any(c in value for c in "\0\r\n") for value in required_strings):
-            raise ValueError("profile paths, host and credential variable names must be nonempty single-line strings")
+            raise ValueError("profile paths and host must be nonempty single-line strings")
+        profile._validate_credential_settings()
         if isinstance(profile.port, bool) or not isinstance(profile.port, int) or not 1 <= profile.port <= 65535:
             raise ValueError("profile port must be an integer between 1 and 65535")
         if not isinstance(profile.guest_os, str) or profile.guest_os not in {"windows", "linux"}:
@@ -85,7 +138,7 @@ def load_profiles(path: str | None = None) -> dict[str, GuestProfile]:
                 or (profile.guest_os == "windows" and not ntpath.splitdrive(profile.guest_temp_dir)[0])):
             raise ValueError("guest_temp_dir must be an absolute, non-root guest directory")
         if any(value is not None and (not isinstance(value, str) or any(c in value for c in "\0\r\n"))
-               for value in (profile.vm_password_env, profile.vmrun, profile.display, profile.xauthority)):
+               for value in (profile.vmrun, profile.display, profile.xauthority)):
             raise ValueError("optional profile settings must be single-line strings")
         if not isinstance(profile.clipboard_backend, str) or profile.clipboard_backend not in {"auto", "x11", "wayland"}:
             raise ValueError("clipboard_backend must be auto, x11 or wayland")
@@ -102,9 +155,6 @@ def load_profiles(path: str | None = None) -> dict[str, GuestProfile]:
                 raise ValueError("display cannot be combined with clipboard_backend = wayland")
             if profile.wayland_display is not None and profile.clipboard_backend == "x11":
                 raise ValueError("wayland_display cannot be combined with clipboard_backend = x11")
-        for variable in (profile.username_env, profile.password_env, profile.vm_password_env):
-            if variable is not None and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", variable):
-                raise ValueError("credential environment variable name is invalid")
         vmx = Path(profile.vmx).expanduser()
         if not vmx.is_absolute():
             vmx = profile_path.parent / vmx
@@ -124,21 +174,24 @@ class VmrunClipboard:
         if not discovered or not Path(discovered).is_file():
             raise ValueError("official vmrun was not found; set VNC_VMRUN_PATH or the profile's vmrun path")
         self.executable = str(discovered)
-        for key in (profile.username_env, profile.password_env, profile.vm_password_env):
-            if key is not None and key not in os.environ:
-                raise ValueError(f"required credential environment variable {key!r} is not set")
-        self.username = os.environ[profile.username_env]
-        if not self.username:
-            raise ValueError("guest username must not be empty")
-        self.password = os.environ[profile.password_env]
+        profile._validate_credential_settings()
+        if profile.vm_password_env is not None and profile.vm_password_env not in os.environ:
+            raise ValueError(f"required credential environment variable {profile.vm_password_env!r} is not set")
         self.vm_password = os.environ.get(profile.vm_password_env, "") if profile.vm_password_env else ""
+        self._guest_credentials: tuple[str, str] | None = (
+            profile.guest_credentials() if profile.windows_credential_target is None else None
+        )
 
     def _invoke(self, command: str, *arguments: str, control: ActionControl) -> str:
         control.check()
+        credentials = self._guest_credentials
+        if credentials is None:
+            raise RuntimeError("guest credentials must be prepared before invoking vmrun")
+        username, password = credentials
         argv = [self.executable, "-T", "ws"]
         if self.vm_password:
             argv += ["-vp", self.vm_password]
-        argv += ["-gu", self.username, "-gp", self.password, command, self.profile.vmx, *arguments]
+        argv += ["-gu", username, "-gp", password, command, self.profile.vmx, *arguments]
         try:
             child = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -155,7 +208,7 @@ class VmrunClipboard:
             control.check()
             if child.returncode:
                 detail = (out + err).decode("utf-8", "replace").strip()
-                for secret in sorted({self.password, self.vm_password}, key=len, reverse=True):
+                for secret in sorted({username, password, self.vm_password}, key=len, reverse=True):
                     if secret:
                         detail = detail.replace(secret, "<redacted>")
                 raise RuntimeError(f"vmrun {command} failed (exit {child.returncode}): {detail[:2000]}")
@@ -167,6 +220,10 @@ class VmrunClipboard:
 
     def prepare_clipboard(self, text: str, control: ActionControl) -> dict:
         validate_text(text)
+        control.check()
+        if self.profile.windows_credential_target is not None:
+            self._guest_credentials = None
+            self._guest_credentials = self.profile.guest_credentials()
         token = uuid4().hex
         join = ntpath.join if self.profile.guest_os == "windows" else posixpath.join
         stem = join(self.profile.guest_temp_dir, f"vmware-vnc-{token}")

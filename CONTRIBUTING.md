@@ -27,3 +27,7 @@ pwsh -NoProfile -File ./scripts/Test.ps1
 提交说明写清问题、行为变化和完成的验证。报告兼容性时，提供项目版本、VNC 服务端、来宾显示环境和 AI 宿主；区分模拟服务与真实端点结果。不要提交密码、私有 profile 或含敏感信息的截图和日志。
 
 版本变化记录在 [CHANGELOG.md](CHANGELOG.md)。发布前核对版本、安装说明、接口、支持范围与固定依赖是否一致。
+
+## 发布
+
+版本号在 `src/vmware_vnc/__init__.py` 维护，构建工具从该处生成包元数据。正式发布时，用同一提交生成源码 ZIP、Python wheel 和这两个文件的 `SHA256SUMS.txt`。从源码包核对安装入口，在独立环境安装 wheel 并检查 CLI 与 MCP。GitHub Release 使用对应的 `v<版本>` 标签。

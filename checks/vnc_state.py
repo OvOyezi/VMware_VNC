@@ -323,7 +323,7 @@ def _check_invalid_inputs(native: Any, session_type: Any, runtime_type: Any) -> 
                 lambda: session.type_text("x", delay_ms=1.5),
                 lambda: session.keypress("\t"),
                 lambda: session.type_text("prefix\x01"),
-                lambda: session.send_text("prefix\x01", method="keys", focus_x=0, focus_y=0),
+                lambda: session.send_text("prefix\x01", method="clipboard", focus_x=0, focus_y=0),
                 lambda: session.capture("png", True),
             )
             for call in invalid_calls:
@@ -381,7 +381,6 @@ def _check_fresh_geometry(native: Any, session_type: Any, runtime_type: Any) -> 
             # the changed dimensions; the control socket has no resize message.
             server.width = 3
             server.initial_rectangles = [(0, 0, 3, 2, [(23, 67, 149)] * 6)]
-            server.initial_sent = False
             image = session.capture()
             assert (image.desktop_width, image.desktop_height) == (3, 2)
             assert (primary.width, primary.height) == (2, 2)
@@ -412,7 +411,6 @@ def _check_fresh_geometry(native: Any, session_type: Any, runtime_type: Any) -> 
             assert len(_events(server, 5)) == before
             server.width = 4
             server.initial_rectangles = [(0, 0, 4, 2, [(91, 128, 203)] * 8)]
-            server.initial_sent = False
             image = session.capture()
             assert (image.desktop_width, image.desktop_height) == (4, 2)
             session.move(3, 1)

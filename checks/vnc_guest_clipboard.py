@@ -1,9 +1,8 @@
-"""Synthetic Linux guest clipboard selection, safety, and profile checks."""
+"""Synthetic guest clipboard selection, credential safety, and profile checks."""
 from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib
 import importlib.util
 import io
 import json
@@ -49,6 +48,252 @@ class _Runtime:
 
 
 class GuestClipboardChecks(unittest.TestCase):
+    def test_credential_backends_are_explicit_exclusive_and_validated_without_reading(self):
+        invalid = (
+            "",
+            'username_env = "VNC_TEST_GUEST_USER"\n',
+            'password_env = "VNC_TEST_GUEST_PASSWORD"\n',
+            'username_env = []\npassword_env = "VNC_TEST_GUEST_PASSWORD"\n',
+            'username_env = "VNC_TEST_GUEST_USER"\npassword_env = "invalid-name"\n',
+            'windows_credential_target = ""\n',
+            'windows_credential_target = []\n',
+            'windows_credential_target = "private\\nvalue"\n',
+            'windows_credential_target = "private\\u0000value"\n',
+            'windows_credential_target = "synthetic"\nusername_env = "VNC_TEST_GUEST_USER"\n',
+            'windows_credential_target = "synthetic"\npassword_env = "VNC_TEST_GUEST_PASSWORD"\n',
+            'windows_credential_target = "synthetic"\nusername_env = "VNC_TEST_GUEST_USER"\n'
+            'password_env = "VNC_TEST_GUEST_PASSWORD"\n',
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for settings in invalid:
+                with self.subTest(settings=settings), self.assertRaises(ValueError):
+                    _load_profile(root, credential_settings=settings)
+            for guest_os in ("windows", "linux"):
+                profile = _load_profile(
+                    root, credential_settings='windows_credential_target = "synthetic"\n', guest_os=guest_os
+                )
+                self.assertEqual(profile.windows_credential_target, "synthetic")
+                self.assertIsNone(profile.username_env)
+                self.assertIsNone(profile.password_env)
+                self.assertTrue(profile.matches("127.0.0.1", 5901))
+                self.assertFalse(profile.matches("127.0.0.1", 5902))
+
+    def test_environment_credentials_and_legacy_positional_profile_remain_compatible(self):
+        profile = _guest.GuestProfile(
+            "synthetic", "127.0.0.1", 5901, "synthetic.vmx", "linux", "/tmp",
+            "VNC_TEST_GUEST_USER", "VNC_TEST_GUEST_PASSWORD", "VNC_TEST_VM_PASSWORD",
+            "synthetic-vmrun", ":9", "/tmp/authority", "x11", None,
+        )
+        self.assertIsNone(profile.windows_credential_target)
+        self.assertEqual(profile.vm_password_env, "VNC_TEST_VM_PASSWORD")
+        self.assertEqual(profile.vmrun, "synthetic-vmrun")
+        self.assertEqual(profile.clipboard_backend, "x11")
+        credentials = {"VNC_TEST_GUEST_USER": "合成用户", "VNC_TEST_GUEST_PASSWORD": "合成密码🙂"}
+        original_import = __import__
+
+        def guarded_import(name, *args, **kwargs):
+            if name == "win32cred":
+                raise AssertionError("the environment backend imported Windows credential support")
+            return original_import(name, *args, **kwargs)
+
+        with mock.patch("builtins.__import__", side_effect=guarded_import), \
+             mock.patch.dict(_guest.os.environ, credentials, clear=True):
+            self.assertEqual(profile.guest_credentials(), ("合成用户", "合成密码🙂"))
+            self.assertEqual(profile.public()["credentials"], "environment_variables")
+        for missing in credentials:
+            environment = {key: value for key, value in credentials.items() if key != missing}
+            with self.subTest(missing=missing), mock.patch.dict(_guest.os.environ, environment, clear=True), \
+                 self.assertRaises(ValueError):
+                profile.guest_credentials()
+
+    def test_windows_credentials_are_lazy_in_profile_listing_and_clipboard_construction(self):
+        original_import = __import__
+
+        def guarded_import(name, *args, **kwargs):
+            if name == "win32cred":
+                raise AssertionError("profile inspection read Windows credentials")
+            return original_import(name, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "vmrun.exe").write_bytes(b"synthetic")
+            with mock.patch("builtins.__import__", side_effect=guarded_import), \
+                 mock.patch.dict(_guest.os.environ, {}, clear=True), \
+                 mock.patch.object(_guest, "get_diagnostics") as diagnostics:
+                profile = _load_profile(root, credential_settings='windows_credential_target = "private-target"\n')
+                _guest.VmrunClipboard(profile)
+                public = profile.public()
+            diagnostics.assert_not_called()
+        self.assertEqual(public["credentials"], "windows_credential_manager")
+        self.assertNotIn("private-target", json.dumps(public))
+
+    def test_windows_credentials_read_only_the_named_generic_target_and_decode_unicode(self):
+        username, password = "域\\合成用户", "合成密码🙂🧪"
+        credential_store = SimpleNamespace(
+            CRED_TYPE_GENERIC=1,
+            CredRead=mock.Mock(return_value={"UserName": username, "CredentialBlob": password.encode("utf-16-le")}),
+            CredEnumerate=mock.Mock(side_effect=AssertionError("credential enumeration is forbidden")),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            profile = _load_profile(
+                Path(directory), credential_settings='windows_credential_target = "synthetic-target"\n'
+            )
+            with mock.patch.object(_guest.sys, "platform", "win32"), \
+                 mock.patch.dict(sys.modules, {"win32cred": credential_store}):
+                self.assertEqual(profile.guest_credentials(), (username, password))
+                credential_store.CredRead.return_value["CredentialBlob"] = b""
+                self.assertEqual(profile.guest_credentials(), (username, ""))
+        self.assertEqual(credential_store.CredRead.call_args_list, [mock.call("synthetic-target", 1, 0)] * 2)
+        credential_store.CredEnumerate.assert_not_called()
+
+    def test_windows_credential_failures_and_malformed_records_hide_all_values(self):
+        secret = "PRIVATE-CREDENTIAL-VALUE"
+        invalid = (
+            None,
+            {},
+            {"UserName": secret},
+            {"CredentialBlob": secret.encode("utf-16-le")},
+            {"UserName": "", "CredentialBlob": b""},
+            {"UserName": [secret], "CredentialBlob": b""},
+            {"UserName": secret + "\0", "CredentialBlob": b""},
+            {"UserName": secret, "CredentialBlob": secret},
+            {"UserName": secret, "CredentialBlob": b"\xff"},
+            {"UserName": secret, "CredentialBlob": b"\x00\xd8"},
+            {"UserName": secret, "CredentialBlob": (secret + "\0").encode("utf-16-le")},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            profile = _load_profile(
+                Path(directory), credential_settings=f'windows_credential_target = "{secret}"\n'
+            )
+            for record in invalid:
+                credential_store = SimpleNamespace(CRED_TYPE_GENERIC=1, CredRead=mock.Mock(return_value=record))
+                with self.subTest(record=record), mock.patch.object(_guest.sys, "platform", "win32"), \
+                     mock.patch.dict(sys.modules, {"win32cred": credential_store}), \
+                     self.assertRaises(RuntimeError) as caught:
+                    profile.guest_credentials()
+                self.assertNotIn(secret, "".join(traceback.format_exception(caught.exception)))
+            for failure in (FileNotFoundError(secret), PermissionError(secret), OSError(secret)):
+                credential_store = SimpleNamespace(CRED_TYPE_GENERIC=1, CredRead=mock.Mock(side_effect=failure))
+                with self.subTest(failure=type(failure).__name__), \
+                     mock.patch.object(_guest.sys, "platform", "win32"), \
+                     mock.patch.dict(sys.modules, {"win32cred": credential_store}), \
+                     self.assertRaises(RuntimeError) as caught:
+                    profile.guest_credentials()
+                self.assertNotIn(secret, "".join(traceback.format_exception(caught.exception)))
+
+    def test_windows_credential_platform_and_import_failures_are_safe(self):
+        original_import = __import__
+        imports = []
+
+        def unavailable_import(name, *args, **kwargs):
+            if name == "win32cred":
+                imports.append(name)
+                raise ImportError("PRIVATE-IMPORT-VALUE")
+            return original_import(name, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as directory:
+            profile = _load_profile(Path(directory), credential_settings='windows_credential_target = "synthetic"\n')
+            with mock.patch("builtins.__import__", side_effect=unavailable_import):
+                with mock.patch.object(_guest.sys, "platform", "linux"), self.assertRaises(RuntimeError):
+                    profile.guest_credentials()
+                self.assertEqual(imports, [])
+                with mock.patch.object(_guest.sys, "platform", "win32"), self.assertRaises(RuntimeError) as caught:
+                    profile.guest_credentials()
+            self.assertEqual(imports, ["win32cred"])
+            self.assertNotIn("PRIVATE-IMPORT-VALUE", "".join(traceback.format_exception(caught.exception)))
+
+    def test_vm_encryption_environment_is_independent_of_windows_guest_credentials(self):
+        credential_store = SimpleNamespace(CRED_TYPE_GENERIC=1, CredRead=mock.Mock())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "vmrun.exe").write_bytes(b"synthetic")
+            profile = _load_profile(
+                root, 'vm_password_env = "VNC_TEST_VM_PASSWORD"\n',
+                credential_settings='windows_credential_target = "synthetic"\n',
+            )
+            with mock.patch.object(_guest.sys, "platform", "win32"), \
+                 mock.patch.dict(sys.modules, {"win32cred": credential_store}):
+                with mock.patch.dict(_guest.os.environ, {}, clear=True), self.assertRaises(ValueError):
+                    _guest.VmrunClipboard(profile)
+                with mock.patch.dict(_guest.os.environ, {"VNC_TEST_VM_PASSWORD": "VM-ENCRYPTION-SECRET"}, clear=True):
+                    helper = _guest.VmrunClipboard(profile)
+            credential_store.CredRead.assert_not_called()
+            self.assertEqual(helper.vm_password, "VM-ENCRYPTION-SECRET")
+
+    def test_invalid_or_cancelled_clipboard_request_does_not_read_windows_credentials(self):
+        credential_store = SimpleNamespace(CRED_TYPE_GENERIC=1, CredRead=mock.Mock())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "vmrun.exe").write_bytes(b"synthetic")
+            profile = _load_profile(root, credential_settings='windows_credential_target = "synthetic"\n')
+            with mock.patch.object(_guest.sys, "platform", "win32"), \
+                 mock.patch.dict(sys.modules, {"win32cred": credential_store}):
+                helper = _guest.VmrunClipboard(profile)
+                with self.assertRaises(ValueError):
+                    helper.prepare_clipboard("invalid\0text", _operations.ActionControl(time.monotonic() + 5))
+                control = _operations.ActionControl(time.monotonic() + 5)
+                control.cancelled.set()
+                with self.assertRaises(_operations.ActionCancelled):
+                    helper.prepare_clipboard("synthetic", control)
+            credential_store.CredRead.assert_not_called()
+
+    def test_windows_credential_read_failure_never_invokes_vmrun_fallback_or_paste(self):
+        client_module = importlib.import_module("vmware_vnc.client")
+        credential_store = SimpleNamespace(CRED_TYPE_GENERIC=1, CredRead=mock.Mock(side_effect=OSError("PRIVATE-SECRET")))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "vmrun.exe").write_bytes(b"synthetic")
+            profile = _load_profile(root, credential_settings='windows_credential_target = "synthetic"\n')
+            session = client_module.VNCSession()
+            session.host, session.port, session.guest_profile = profile.host, profile.port, profile
+            with mock.patch.object(_guest.sys, "platform", "win32"), \
+                 mock.patch.dict(sys.modules, {"win32cred": credential_store}), \
+                 mock.patch.object(session, "_require_client", return_value=SimpleNamespace()), \
+                 mock.patch.object(session, "_require_display"), \
+                 mock.patch.object(session, "_literal_text_transport", return_value="guest"), \
+                 mock.patch.object(session, "_check_point"), \
+                 mock.patch.object(session, "clipboard_set") as fallback, \
+                 mock.patch.object(session, "type_text") as keys, \
+                 mock.patch.object(session, "click") as click, \
+                 mock.patch.object(session, "keypress") as paste, \
+                 mock.patch.object(_guest.subprocess, "Popen", side_effect=AssertionError("vmrun was invoked")) as popen, \
+                 self.assertRaises(RuntimeError) as caught:
+                session.send_text("synthetic", focus_x=5, focus_y=5)
+            credential_store.CredRead.assert_called_once_with("synthetic", 1, 0)
+            for action in (fallback, keys, click, paste, popen):
+                action.assert_not_called()
+            self.assertNotIn("PRIVATE-SECRET", "".join(traceback.format_exception(caught.exception)))
+
+    def test_windows_credential_values_are_redacted_from_vmrun_failure(self):
+        username, password, vm_password = "PRIVATE-USERNAME", "合成密码🙂", "PRIVATE-VM-PASSWORD"
+        credential_store = SimpleNamespace(
+            CRED_TYPE_GENERIC=1,
+            CredRead=mock.Mock(return_value={"UserName": username, "CredentialBlob": password.encode("utf-16-le")}),
+        )
+        child = SimpleNamespace(
+            returncode=1,
+            communicate=mock.Mock(return_value=(f"{username} {password} {vm_password}".encode("utf-8"), b"")),
+            poll=mock.Mock(return_value=1), kill=mock.Mock(),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "vmrun.exe").write_bytes(b"synthetic")
+            profile = _load_profile(
+                root, 'vm_password_env = "VNC_TEST_VM_PASSWORD"\n',
+                credential_settings='windows_credential_target = "synthetic"\n',
+            )
+            with mock.patch.object(_guest.sys, "platform", "win32"), \
+                 mock.patch.dict(sys.modules, {"win32cred": credential_store}), \
+                 mock.patch.dict(_guest.os.environ, {"VNC_TEST_VM_PASSWORD": vm_password}, clear=True), \
+                 mock.patch.object(_guest.subprocess, "Popen", return_value=child), \
+                 self.assertRaises(RuntimeError) as caught:
+                _guest.VmrunClipboard(profile).prepare_clipboard("synthetic", _operations.ActionControl(time.monotonic() + 5))
+            credential_store.CredRead.assert_called_once()
+            rendered = "".join(traceback.format_exception(caught.exception))
+            for secret in (username, password, vm_password):
+                self.assertNotIn(secret, rendered)
+
     def test_profile_backend_and_wayland_settings_are_validated(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -310,7 +555,7 @@ class GuestClipboardChecks(unittest.TestCase):
                 self.assertEqual(captured["wayland_display"], "wayland-0")
 
 
-def _profile_document(root: Path, extra: str, guest_os: str = "linux") -> str:
+def _profile_document(root: Path, extra: str, guest_os: str = "linux", credential_settings: str | None = None) -> str:
     vmx = root / "synthetic.vmx"
     vmx.write_text("synthetic", encoding="utf-8")
     guest_temp_dir = "/tmp" if guest_os == "linux" else "C:/Temp"
@@ -322,15 +567,16 @@ def _profile_document(root: Path, extra: str, guest_os: str = "linux") -> str:
         f"vmx = {json.dumps(vmx.as_posix())}\n"
         f'guest_os = "{guest_os}"\n'
         f'guest_temp_dir = "{guest_temp_dir}"\n'
-        'username_env = "VNC_TEST_GUEST_USER"\npassword_env = "VNC_TEST_GUEST_PASSWORD"\n'
+        + (credential_settings if credential_settings is not None else
+           'username_env = "VNC_TEST_GUEST_USER"\npassword_env = "VNC_TEST_GUEST_PASSWORD"\n')
         + vmrun_setting
         + extra
     )
 
 
-def _load_profile(root: Path, extra: str = ""):
+def _load_profile(root: Path, extra: str = "", credential_settings: str | None = None, guest_os: str = "linux"):
     path = root / "profiles.toml"
-    path.write_text(_profile_document(root, extra), encoding="utf-8")
+    path.write_text(_profile_document(root, extra, guest_os, credential_settings), encoding="utf-8")
     return _guest.load_profiles(str(path))["synthetic"]
 
 
@@ -364,41 +610,15 @@ def _load_modules(source_root: Path) -> None:
     helper_spec.loader.exec_module(_linux)
 
 
-class _EvidenceResult(unittest.TextTestResult):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.failure_details = []
-
-    def _record(self, test, err):
-        exception_type, exception, _ = err
-        self.failure_details.append({
-            "test": test.id(),
-            "exception_type": f"{exception_type.__module__}.{exception_type.__qualname__}",
-            "message": str(exception),
-            "traceback": self._exc_info_to_string(err, test),
-        })
-
-    def addFailure(self, test, err):
-        self._record(test, err)
-        super().addFailure(test, err)
-
-    def addError(self, test, err):
-        self._record(test, err)
-        super().addError(test, err)
-
-
 def _run_checks() -> dict[str, object]:
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(GuestClipboardChecks)
-    tests = list(suite)
-    result = unittest.TextTestRunner(stream=io.StringIO(), verbosity=2, resultclass=_EvidenceResult).run(suite)
-    failed_ids = {detail["test"] for detail in result.failure_details}
-    skipped_ids = {test.id() for test, _ in result.skipped}
-    checks = {
-        test.id().rsplit(".", 1)[-1].removeprefix("test_"): test.id() not in failed_ids
-        for test in tests if test.id() not in skipped_ids
-    }
-    skipped = [{"test": test.id(), "reason": reason} for test, reason in result.skipped]
-    return {"success": result.wasSuccessful(), "checks": checks, "skipped": skipped, "failures": result.failure_details}
+    if __package__:
+        from ._unittest_report import run_cases
+    else:
+        from _unittest_report import run_cases
+
+    checks, result = run_cases(GuestClipboardChecks, stream=io.StringIO())
+    return {"success": result.wasSuccessful(), "checks": checks,
+            "skipped": result.skipped_details, "failures": result.failure_details}
 
 
 def main(argv: list[str] | None = None) -> int:

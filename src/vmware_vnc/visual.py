@@ -166,7 +166,7 @@ class VisualWatch:
             # Keep one anchor for the window so small consecutive changes cannot
             # hide cumulative drift. Reset only when its tolerance is exceeded.
             self.anchor, self.stable_since = frame, now
-        return self.comparisons > 0 and now - self.stable_since >= self.settings.stable_for
+        return now - self.stable_since >= self.settings.stable_for
 
     def metadata(self, matched: bool, elapsed: float, now: float) -> dict:
         return {"condition": self.settings.condition, "matched": matched, "timed_out": not matched,

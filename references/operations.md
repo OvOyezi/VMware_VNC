@@ -14,7 +14,7 @@ vnc_screenshot(session_id="desktop-a", connection_id="<本次返回的 ID>")
 
 连接返回目标、原生尺寸和 connection_id。确认截图与指定虚拟机一致后再输入。具名会话名为 1–64 个 ASCII 字母、数字或 `._-`，首字符须为字母或数字。
 
-MCP 当前注册 24 个工具。若 ServerInit 为 0×0，或认证连接在有界等待内仍没有完整的初始帧，连接可保持 `connected=true`，状态为 `display_state="unavailable"`。不完整画面不会作为截图暴露；这表示控制连接仍在，但没有可用帧缓冲。
+若 ServerInit 为 0×0，或认证连接在有界等待内仍没有完整的初始帧，连接可保持 `connected=true`，状态为 `display_state="unavailable"`。不完整画面不会作为截图暴露；这表示控制连接仍在，但没有可用帧缓冲。
 
 需要 VNC 认证时，在 MCP 启动环境中提供 `VNC_PASSWORD_ENV` 指定的变量，默认变量名为 `VNC_PASSWORD`；单次 `vnc_connect` 也接受 `password` 参数。通过宿主的凭据机制传递真实值，不在示例、日志或报告中展开。
 
@@ -31,10 +31,10 @@ MCP 会话默认 `screenshot_mode="auto"`：先在当前连接上做一次有界
 | vnc_connect | host、port、session_id、可选 password／profile；或单独 url（vnc／vnc+tls／ws／wss）；重连同名会话会生成新 connection_id |
 | vnc_profiles | 无参数；列出配置端点，不读取凭据 |
 | vnc_diagnostics | 无参数；读取 VNC 运行依赖及可选来宾剪贴板后端的发现信息 |
-| vnc_status | session_id；等待该会话此前操作后读取实时状态 |
+| vnc_status | session_id。等待该会话此前操作后读取状态。`keyboard_state.leds` 为本次连接最近的锁定键报告，`ime_mode` 为 `null` |
 | vnc_sessions | 无参数；非阻塞缓存清单，不证明端点此刻仍在线 |
 | vnc_screenshot | image_format、quality、region、remember；记住参考时返回 reference_id |
-| vnc_inspect | region、reference_id、points、detail_region、zoom、pixel_threshold、frame_id；返回原色 PNG、RGB 采样及可选细节/差异图 |
+| vnc_inspect | 常规检查支持区域、RGB 采样和参考比较。可另选 `keyboard_fields` 批量检查键盘和输入法状态，按需返回一张原图 |
 | vnc_wait_for | condition、reference_id、region、timeout、interval、stable_for、pixel_threshold、max_changed_ratio；见画面条件参考 |
 | vnc_click | x、y、button（left/middle/right）、count（1–3） |
 | vnc_move | x、y |
@@ -44,7 +44,8 @@ MCP 会话默认 `screenshot_mode="auto"`：先在当前连接上做一次有界
 | vnc_key_down / vnc_key_up | key；保持 / 释放按键 |
 | vnc_mouse_down / vnc_mouse_up | x、y、button；保持 / 释放鼠标按钮 |
 | vnc_text | text、method、paste_key、focus_x/focus_y；auto 只使用已协商 UTF-8 剪贴板或绑定 profile，否则发送前拒绝 |
-| vnc_type | 与 vnc_text 相同；`delay_ms` 仅可与显式 `method="keys"` 一起使用，逐键最小间隔为 20 毫秒 |
+| vnc_type | 与 vnc_text 一样粘贴原文，兼容参数 `delay_ms` 仅接受 0 |
+| vnc_type_keys | text、delay_ms、entry_mode、expect_caps_lock。在已有焦点上整批发送按键。entry_mode 可选 direct、richedit-hex、gtk-hex。expect_caps_lock 比较最近报告的 Caps Lock |
 | vnc_clipboard_set | text；协商成功使用 UTF-8 扩展，否则仅 Latin-1；只准备剪贴板 |
 | vnc_clipboard_get | 读取服务最近接收的远端剪贴板通知，可能是缓存 |
 | vnc_wake | 无参数；只发送两次指针移动，不点击、不按键、不解锁；之后须重新截图 |
@@ -70,6 +71,8 @@ MCP 会话默认 `screenshot_mode="auto"`：先在当前连接上做一次有界
 RFB 传输由本项目的 asyncio 实现管理，运行依赖诊断报告 `mcp`、Pillow、cryptography、websockets 及传输引擎状态（I/O 线程与连接 lease 数）。`VNC_ENCODING` / CLI `--encoding` 可选 `auto`、`raw`、`hextile`、`zrle`、`tight`。`auto` 声明支持无损 ZRLE、Tight、Hextile、CopyRect 和 RAW；显式编码偏好也保留 RAW 回退。Tight 只接受无损子集，遇到 Tight JPEG 矩形会拒绝该帧。
 
 ## 画面检查
+
+指定 `keyboard_fields` 时优先使用协议直读，仍需视觉判断的字段合用一张原色 PNG。此模式接受 `region` 和可选的 MCP `frame_id`。像素采样、差异比较和放大使用下方的常规模式。CLI 通过重复的 `--keyboard-field` 选择字段。[输入状态与示例](text-input.md#检查键盘和输入法状态)
 
 `vnc_inspect` 接受可选 `region`、`reference_id`、`points=[{"x": 120, "y": 230}]`、`detail_region`、`zoom`、`pixel_threshold` 与 `frame_id`。坐标均为桌面原生坐标。它始终返回当前原色 PNG；指定参考图时还会返回参考比较、逐点 RGB 和 delta，以及可选的 `detail_current`、`detail_reference`、`difference_amplified`。差异图把每通道绝对差乘以 16、最高截到 255，并放大显示，因此颜色是人为增强的；查看原像素请使用 current PNG 或精确 RGB 数值。
 
@@ -108,6 +111,6 @@ $vnc = "$projectRoot/.venv/Scripts/vmware-vnc.exe"
 
 回归分类和显式实机验收入口见 [检查工具](../checks/README.md)。
 
-CLI 提供 `wake` 子命令；例如 `& $vnc wake --host 127.0.0.1 --port 5901` 显式发送 wake 移动后，再运行 `screenshot`。它只报告动作是否已发送，不保证解锁或显示恢复。`type --delay-ms` 必须同时指定 `--method keys`；查看目标输入法后才使用键盘路径。
+CLI 提供 `wake` 子命令；例如 `& $vnc wake --host 127.0.0.1 --port 5901` 显式发送 wake 移动后，再运行 `screenshot`。它只报告动作是否已发送，不保证解锁或显示恢复。模拟敲键使用 `type-keys`，可通过 `--delay-ms` 指定间隔。码位输入使用 `--entry-mode richedit-hex` 或 `--entry-mode gtk-hex`。可选的 `--expect-caps-lock on|off` 使用该次连接的锁定键报告。
 
 CLI 的 `--url` 与 `--host`／`--port`／`--profile` 互斥；原生 host、port 必须成对提供。连接选项 `--tls-ca-file`、`--timeout`、`--action-timeout` 分别控制 CA 信任、单步网络等待及操作预算。URL 路径和查询参数不写入公开状态，TLS 配置详见 [安装与接入](setup.md)。

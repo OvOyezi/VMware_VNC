@@ -12,11 +12,11 @@
 | VMware / GNOME 空闲后报告 0×0 或无法恢复 | 先尝试显式 `vnc_wake` 并重新截图；若仍无可用帧，检查来宾显示节能状态。来宾显示服务强制关闭时，可能需要从来宾侧恢复显示。wake 不解锁 |
 | connection_id 失效 | 重连、断线或空闲回收会改变连接。确认目标后显式重连，保存新 ID 并截图；不要自动重放旧输入 |
 | 队列满 / 操作超时 / 取消 | 停止提交后续输入，检查状态与新截图。取消为协作式，不能撤回已发送输入，也不能强行抢占单步网络等待与编码 |
-| 字母被输入法转换 | `method="keys"` 会经过当前来宾输入法，工具不切换输入法。先截图确认目标控件的焦点和输入模式，再重新观察；不要盲发整段文字 |
-| 连续输入缺字 | 显式键盘路径至少间隔 20 毫秒。先检查已有文字，再决定下一步；必要时只对 `method="keys"` 增加 `delay_ms`、分段输入并等待应用处理 |
+| 命令里的英文变成汉字或标点变成全角 | 先核对输入框中已有内容。查看 `vnc_inspect(keyboard_fields=["ime_mode", "character_width"])` 返回的指示图。原样文字可用 `vnc_text`，仅有键盘时按目标控件选择码位输入。CLI 可从 `--text-file` 读取含宿主 shell 特殊字符的原文 |
+| 模拟敲键时连续输入缺字 | `vnc_type_keys` 至少间隔 20 毫秒。先核对已有文字，需要时增加 `delay_ms` |
 | 拖动超时 | 检查动作预算、网络响应与 MCP 服务进程版本。超时后先重连截图，确认实际窗口位置，不重放旧动作 |
-| `method="auto"` 拒绝文本 | 自动路径只选已协商 UTF-8 剪贴板或绑定 profile；没有任一通道时 ASCII 和 Unicode 都会在点击焦点及输入前拒绝。查看 capabilities，或显式配置 guest profile；若目标是键盘事件，先目视确认输入法后指定 `method="keys"` |
-| 键盘文字与预期不同 | `method="keys"` 结果带 `input_method_sensitive=true`，且 `application_verified=false`。检查该控件的输入模式并重新截图；工具不会自动切换 IME，也不保证字面文本 |
+| `method="auto"` 拒绝文本 | 查看 `capabilities.literal_text_transport`。若为 `null`，用 `vnc_profiles` 找到端点匹配的来宾 profile，按名称重连并截图；也可以使用支持 UTF-8 Extended Clipboard 的服务端 |
+| 虚拟机粘贴了旧文字 | 普通 RFB 服务端可能忽略 ClientCutText。原样粘贴需使用协商的 UTF-8 扩展或经校验的来宾剪贴板。先核对目标控件及已粘贴内容 |
 | `clipboard_verified=true` 但控件没有文字 | 校验只证明剪贴板已准备。检查 focus 坐标、当前窗口、粘贴快捷键与应用是否接受粘贴；不要自动再发同一段 |
 | Linux 来宾剪贴板后端报告 Tools 不可用 | 检查发行版是否把 guest operations 拆成独立软件包；基础服务运行与来宾辅助通道可用须分别核对 |
 | Linux 剪贴板准备超时 | 查看固定阶段、后端及原因标签。后端在写入前选定，失败不会切换后端或重新发送文字；本次创建的剪贴板子进程组会在失败时回收。GNOME 原生 Wayland 的焦点策略仍可能受 compositor 限制，且新 backend 尚未完成 VMware 实机验收。可明确指定 Xwayland `display`、`clipboard_backend="x11"` 并使用 xclip/xsel，之后在应用内重新验收 |

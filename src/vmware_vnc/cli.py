@@ -18,6 +18,20 @@ from . import __version__
 class _CLIArgumentParser(argparse.ArgumentParser):
     def parse_args(self, args=None, namespace=None):
         parsed = super().parse_args(args, namespace)
+        if parsed.command in {"text", "type"} and (parsed.text is None) == (parsed.text_file is None):
+            self.error("provide exactly one of text or --text-file")
+        if parsed.command == "inspect":
+            if parsed.keyboard_field is None:
+                if parsed.output_dir is None:
+                    self.error("inspect requires --output-dir when --keyboard-field is omitted")
+            else:
+                from .inspection import KEYBOARD_FIELDS
+
+                if any(field not in KEYBOARD_FIELDS for field in parsed.keyboard_field):
+                    self.error("--keyboard-field must be one of " + ", ".join(KEYBOARD_FIELDS))
+                if (parsed.reference_file is not None or parsed.point is not None or parsed.detail_region is not None or
+                        parsed.zoom != 4 or parsed.pixel_threshold != 0):
+                    self.error("--keyboard-field cannot be combined with pixel inspection options")
         if hasattr(parsed, "host"):
             if (parsed.host is None) != (parsed.port is None):
                 self.error("--host and --port must be supplied together")
@@ -83,13 +97,9 @@ def _validate_target(args: argparse.Namespace, config) -> None:
     if url is not None:
         if not url.strip():
             raise ValueError("--url must not be empty")
-        if host is not None or port is not None or profile is not None:
-            raise ValueError("--url cannot be combined with --host, --port or --profile")
         return
     if profile is not None and not profile.strip():
         raise ValueError("--profile must not be empty")
-    if (host is None) != (port is None):
-        raise ValueError("--host and --port must be supplied together")
     if host is not None:
         if not host.strip():
             raise ValueError("--host must not be empty")
@@ -148,19 +158,23 @@ async def _run_action_async(args: argparse.Namespace, config) -> int:
                         "load_visual_reference", args.reference_file, region,
                     )).value
                 points = [tuple(point) for point in args.point] if args.point else None
-                inspected_result = await application.run(
-                    "inspect", region, reference_id, points,
+                inspect_args = (
+                    region, reference_id, points,
                     tuple(args.detail_region) if args.detail_region else None,
                     args.zoom, args.pixel_threshold,
                 )
+                if args.keyboard_field is not None:
+                    inspect_args += (None, args.keyboard_field)
+                inspected_result = await application.run("inspect", *inspect_args)
                 inspected = inspected_result.value
-                target = Path(args.output_dir)
-                target.mkdir(parents=True, exist_ok=True)
                 saved = {}
-                for kind, image in inspected.images:
-                    path = target / f"{kind}.png"
-                    path.write_bytes(image.data)
-                    saved[kind] = str(path.resolve())
+                if inspected.images:
+                    target = Path(args.output_dir if args.output_dir is not None else "vnc-inspection")
+                    target.mkdir(parents=True, exist_ok=True)
+                    for kind, image in inspected.images:
+                        path = target / f"{kind}.png"
+                        path.write_bytes(image.data)
+                        saved[kind] = str(path.resolve())
                 result = {**inspected.details, "saved": saved}
             elif args.command == "click":
                 result = (await application.run("click", args.x, args.y, args.button, args.count)).value
@@ -174,20 +188,16 @@ async def _run_action_async(args: argparse.Namespace, config) -> int:
                 result = (await application.run("scroll", args.x, args.y, args.direction, args.amount)).value
             elif args.command == "keypress":
                 result = (await application.run("keypress", args.key)).value
-            elif args.command == "type":
-                focus_x, focus_y = args.focus or (None, None)
-                result = (await application.run(
-                    "send_text", args.text, args.method, args.paste_key,
-                    focus_x, focus_y, args.delay_ms,
-                )).value
-            elif args.command == "text":
-                if (args.text is None) == (args.text_file is None):
-                    raise ValueError("provide exactly one of text or --text-file")
-                if args.text_file:
+            elif args.command == "type-keys":
+                caps_lock = None if args.expect_caps_lock is None else args.expect_caps_lock == "on"
+                result = (await application.run("type_text", args.text, args.delay_ms, args.entry_mode, caps_lock)).value
+            elif args.command in {"text", "type"}:
+                if args.text_file is not None:
                     path = Path(args.text_file)
                     if path.stat().st_size > 1024 * 1024:
                         raise ValueError("text file exceeds the byte limit")
-                    text = path.read_text(encoding="utf-8-sig")
+                    with path.open(encoding="utf-8-sig", newline="") as stream:
+                        text = stream.read()
                 else:
                     text = args.text
                 focus_x, focus_y = args.focus or (None, None)
@@ -273,7 +283,7 @@ def build_parser() -> argparse.ArgumentParser:
     screenshot.add_argument("--format", dest="image_format", choices=("png", "jpeg"), default="png")
     screenshot.add_argument("--quality", type=int, default=80)
     screenshot.add_argument("--region", nargs=4, type=int, metavar=("X", "Y", "WIDTH", "HEIGHT"))
-    inspect = sub.add_parser("inspect", help="inspect lossless pixels and optional reference differences")
+    inspect = sub.add_parser("inspect", help="inspect lossless pixels, reference differences or keyboard state")
     _connection_options(inspect)
     inspect.add_argument("--reference-file", help="explicit PNG/JPEG reference with matching selected-region dimensions")
     inspect.add_argument("--region", nargs=4, type=int, metavar=("X", "Y", "WIDTH", "HEIGHT"))
@@ -281,7 +291,9 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("--detail-region", nargs=4, type=int, metavar=("X", "Y", "WIDTH", "HEIGHT"))
     inspect.add_argument("--zoom", type=int, default=4)
     inspect.add_argument("--pixel-threshold", type=int, default=0)
-    inspect.add_argument("--output-dir", required=True, help="directory for current and clearly labeled detail PNGs")
+    inspect.add_argument("--keyboard-field", action="append", metavar="FIELD",
+                         help="inspect a lock key or IME field. Repeat for multiple fields")
+    inspect.add_argument("--output-dir", help="PNG directory. Required for pixel inspection. Defaults to ./vnc-inspection in keyboard mode")
     click = sub.add_parser("click", help="click at screen coordinates")
     _connection_options(click)
     click.add_argument("x", type=int)
@@ -310,18 +322,20 @@ def build_parser() -> argparse.ArgumentParser:
     keypress = sub.add_parser("keypress", help="press a key or chord such as ctrl-c or alt-tab")
     _connection_options(keypress)
     keypress.add_argument("key")
-    type_command = sub.add_parser("type", help="type text in the focused desktop control")
-    _connection_options(type_command)
-    type_command.add_argument("text")
-    type_command.add_argument("--delay-ms", type=int, default=0)
-    type_command.add_argument("--method", choices=("auto", "keys", "clipboard", "guest"), default="auto")
-    type_command.add_argument("--paste-key", choices=("ctrl-v", "ctrl-shift-v", "shift-insert", "meta-v"), default="ctrl-v")
-    type_command.add_argument("--focus", nargs=2, type=int, metavar=("X", "Y"), help="observed input control coordinates; required for guest text")
-    literal = sub.add_parser("text", help="submit Unicode text using negotiated clipboard or an explicit guest profile")
+    keys = sub.add_parser("type-keys", help="send physical key events to the focused control; subject to the guest IME")
+    _connection_options(keys)
+    keys.add_argument("text", help="characters to simulate as keystrokes")
+    keys.add_argument("--delay-ms", type=int, default=0, help="minimum delay between key events")
+    keys.add_argument("--entry-mode", choices=("direct", "richedit-hex", "gtk-hex"), default="direct",
+                      help="send ordinary keystrokes or Unicode entry sequences for a known focused control")
+    keys.add_argument("--expect-caps-lock", choices=("on", "off"),
+                      help="stop if the last server Caps Lock report is missing or differs")
+    literal = sub.add_parser("text", aliases=["type"], help="paste literal text using negotiated clipboard or a bound guest profile")
     _connection_options(literal)
     literal.add_argument("text", nargs="?")
     literal.add_argument("--text-file", help="UTF-8 input file; text is never a shell command")
-    literal.add_argument("--method", choices=("auto", "keys", "clipboard", "guest"), default="auto")
+    literal.add_argument("--method", choices=("auto", "clipboard", "guest"), default="auto")
+    literal.add_argument("--delay-ms", type=int, choices=(0,), default=0, help=argparse.SUPPRESS)
     literal.add_argument("--paste-key", choices=("ctrl-v", "ctrl-shift-v", "shift-insert", "meta-v"), default="ctrl-v")
     literal.add_argument("--focus", nargs=2, type=int, metavar=("X", "Y"), help="observed input control coordinates; required for guest text")
     subcommands = (("clipboard-get", None), ("clipboard-set", "text"))
@@ -367,7 +381,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command in {
         "connect", "status", "screenshot", "inspect", "click", "move", "wake", "drag", "scroll",
-        "keypress", "type", "text", "clipboard-get", "clipboard-set", "wait", "wait-for",
+        "keypress", "type-keys", "type", "text", "clipboard-get", "clipboard-set", "wait", "wait-for",
     }:
         return asyncio.run(_run_action_async(args, config))
     return asyncio.run(_run_readonly_async(args, config))

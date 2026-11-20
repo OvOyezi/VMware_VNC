@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
 import base64
 from hashlib import sha256
 from io import BytesIO
@@ -17,7 +16,6 @@ import struct
 import sys
 import tempfile
 import threading
-import time
 import traceback
 import unittest
 
@@ -29,7 +27,6 @@ from PIL import Image
 _regression = None
 _source_root: Path | None = None
 _checks: dict[str, bool] = {}
-_server_stderr: str = ""
 
 _CHECK_NAMES = (
     "default_screenshot_is_lossless_png_with_source_hash_and_image_hint",
@@ -609,48 +606,21 @@ def _load(source_root: Path) -> None:
         raise ImportError(f"RFB fixture loaded from a different source: {_regression.__file__}")
 
 
-class _EvidenceResult(unittest.TextTestResult):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.failures_with_tracebacks = []
-
-    def _remember_failure(self, test, err):
-        exception_type, exception, _ = err
-        self.failures_with_tracebacks.append({
-            "test": test.id(),
-            "exception_type": f"{exception_type.__module__}.{exception_type.__qualname__}",
-            "message": str(exception),
-            "traceback": self._exc_info_to_string(err, test),
-        })
-
-    def addFailure(self, test, err):
-        self._remember_failure(test, err)
-        super().addFailure(test, err)
-
-    def addError(self, test, err):
-        self._remember_failure(test, err)
-        super().addError(test, err)
-
-
 def _run_checks() -> dict[str, object]:
-    global _checks, _server_stderr
+    if __package__:
+        from ._unittest_report import run_cases
+    else:
+        from _unittest_report import run_cases
+
+    global _checks
     _checks = {name: False for name in _CHECK_NAMES}
-    _server_stderr = ""
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(VisualFidelityMcpChecks)
-    tests = list(suite)
     output = io.StringIO()
-    result = unittest.TextTestRunner(stream=output, verbosity=2, resultclass=_EvidenceResult).run(suite)
-    failures = result.failures_with_tracebacks
-    failed_ids = {detail["test"] for detail in failures}
-    checks = {
-        test.id().rsplit(".", 1)[-1].removeprefix("test_"): test.id() not in failed_ids
-        for test in tests
-    }
+    checks, result = run_cases(VisualFidelityMcpChecks, stream=output)
     checks.update(_checks)
     report: dict[str, object] = {
         "success": result.wasSuccessful() and all(_checks.values()),
         "checks": checks,
-        "failures": failures,
+        "failures": result.failure_details,
         "scope": "real MCP stdio with synthetic loopback RFB desktops only; no VM access",
     }
     if output.getvalue():

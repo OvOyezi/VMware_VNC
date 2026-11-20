@@ -30,7 +30,9 @@ MCP 是 AI 连续交互的主要入口，可保留连接、会话和画面参考
 
 ## 文本与画面条件
 
-- `vnc_text`、`vnc_type` 与 CLI `text` / `type` 的 `auto` 只选已协商的 UTF-8 剪贴板或明确绑定的来宾 profile。两者都没有时，任何非空文本都在点击焦点和发送输入前拒绝；需要键盘事件时，先点击目标控件，再截图确认该窗口的输入法（焦点切换可能切换输入法），然后显式选 `method="keys"`，通常不再传 `focus_x/focus_y`，避免再次点击。工具不会自动探测或切换来宾输入法。逐键结果带 `input_method_sensitive=true`，`application_verified` 仍为 `false`；输入可能被输入法转换，必须截图核对应用结果。`delay_ms` 仅与显式 `method="keys"` 同用。
+- 命令、路径和混合文字优先用 `vnc_text` 或 CLI `text` 整段提交。`capabilities.literal_text_transport` 为 `null` 时，调用方可以显式使用匹配的来宾 profile，或选择下述纯 VNC 按键方式。
+- 已确认控件、焦点及 ASCII 直输条件时，用 `vnc_type_keys` 或 CLI `type-keys` 一次发送整段，结束后核对。已知支持码位输入的 RichEdit 或 GTK 控件可选 `entry_mode="richedit-hex"` 或 `"gtk-hex"`。GTK 会用回车提交每个码位。拼音选词使用默认 `direct`，出现候选时核对候选。
+- 只查键盘灯时读取 `vnc_status().keyboard_state.leds`。同时需要确认输入法时，调用 `vnc_inspect(keyboard_fields=["caps_lock", "ime_mode"], ...)`，可指定已观察到的指示区域。先使用端点报告的值，再从返回的原图判断待确认字段。图中缺少明确指示时保留未知。大小写敏感的敲键可指定 `expect_caps_lock=false`。[文本输入](references/text-input.md)
 - Linux 来宾 profile 可选择 X11 或 Wayland 剪贴板后端。Wayland 只在 socket 明确且归属当前账号时使用；GNOME 原生 Wayland 的焦点限制尚未实测解决，显式使用 Xwayland 与现有 X11 剪贴板工具是兼容路径。配置见 [文本输入](references/text-input.md)。
 - 来宾辅助输入需要本次截图确认的 `focus_x/focus_y`。准备剪贴板后的点击会取消旧选区，替换内容前先明确清空。
 - 等待变化或匹配前，用 `vnc_screenshot(remember=true)` 保存参考；stable 使用自己的起始画面。参考生命周期、区域和容差见 [画面条件](references/visual-waits.md)。

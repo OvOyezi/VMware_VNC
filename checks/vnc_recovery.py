@@ -95,6 +95,7 @@ def _check_automatic_text() -> dict[str, Any]:
     with _native.NativeRfbFixture() as server:
         try:
             connected = session.connect("127.0.0.1", server.port, password=None, url=None)
+            assert connected["capabilities"]["literal_text_transport"] is None
             before_events = _events(server)
             before_keys = len(_events(server, 4))
             before_pointers = len(_events(server, 5))
@@ -109,7 +110,7 @@ def _check_automatic_text() -> dict[str, Any]:
             assert len(_events(server, 4)) == before_keys
             assert len(_events(server, 5)) == before_pointers
 
-            result = session.send_text("a", method="keys")
+            result = session.type_text("a")
             observed = server.wait_for(lambda values: keys if len(keys := [e for e in values if e.get("type") == 4]) >= before_keys + 2 else None)
             key_events = [event for event in observed if event.get("type") == 4]
             assert [(event["down"], event["keysym"]) for event in key_events[-2:]] == [(1, 0x61), (0, 0x61)]
@@ -134,7 +135,7 @@ def _check_auto_delay() -> dict[str, Any]:
             before = _events(server)
             exc = _expect_raises(lambda: session.send_text("slow", method="auto", delay_ms=50), ValueError,
                                  "automatic text with delay_ms")
-            assert "explicit method=keys" in str(exc)
+            assert "type_keys" in str(exc) or "type-keys" in str(exc)
             assert _events(server) == before, "automatic delayed text emitted an RFB message"
             assert not _events(server, 4) and not _events(server, 5)
             assert session.status()["connected"] is True
@@ -447,15 +448,13 @@ def _check_capture_timeout_invalidates_and_recovers() -> dict[str, Any]:
             assert session.status()["display_state"] == "ready"
             assert session.inspect(frame_id=frame_id).details["cached_frame"] is True
 
+            server.automatic_initial_update = False
             requests_before = len(_events(server, 3))
             failed_capture = _run_thread(session.capture, "vnc-recovery-timed-out-capture")
             server.wait_for(
                 lambda values: requests if len(requests := [e for e in values if e.get("type") == 3]) > requests_before else None
             )
-            # Auto mode falls back to a short-lived fresh connection after the
-            # control connection's requested refresh times out. The fixture's
-            # first response has already been used, so this new connection also
-            # withholds pixels and exercises the complete no-fresh-frame path.
+            # Both the control refresh and the fresh connection withhold pixels.
             _native._wait_until(lambda: server.connection is not control_socket, timeout=1.5)
             fallback_socket = server.connection
             server.wait_for(
@@ -499,11 +498,7 @@ def _check_capture_timeout_invalidates_and_recovers() -> dict[str, Any]:
             assert session.status()["display_state"] == "unavailable", "wake incorrectly marked the display ready"
             assert not _events(server, 4)
 
-            # Once the current wake cycle permits a full fresh frame, auto's
-            # established fresh strategy must recover without changing the
-            # long-lived connection ID. Reset the one-shot fixture response
-            # before creating that next temporary screenshot connection.
-            server.initial_sent = False
+            server.automatic_initial_update = True
             fallback_socket = server.connection
             requests_before = len(_events(server, 3))
             recovered_capture = _run_thread(session.capture, "vnc-recovery-successful-fresh-capture")

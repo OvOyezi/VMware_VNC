@@ -48,7 +48,11 @@ async def run(args, report):
 
                 async def screenshot(label, index, region=None):
                     state = states[label]
-                    arguments = {"session_id": label, "connection_id": state["connection_id"]}
+                    arguments = {
+                        "session_id": label,
+                        "connection_id": state["connection_id"],
+                        "image_format": "jpeg",
+                    }
                     if region:
                         arguments["region"] = region
                     started = time.monotonic()
@@ -132,6 +136,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     args.config, args.output = args.config.resolve(), args.output.resolve()
+    args.output.parent.mkdir(parents=True, exist_ok=True)
     report = {"tested_at": datetime.now(timezone.utc).isoformat(), "registered_server": "vmware_vnc",
               "input_sent": False, "images": [], "parallel_capture_batch_seconds": [], "checks": {}, "success": False}
     try:

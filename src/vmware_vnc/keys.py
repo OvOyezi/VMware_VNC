@@ -9,6 +9,7 @@ keysyms directly; this module does not infer a guest keyboard layout.
 """
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 import re
 
@@ -232,3 +233,27 @@ def normalize_key(key: str) -> str:
 def keysyms(key: str) -> list[int]:
     """Return ordered key-down keysyms for a key or chord."""
     return list(parse_key(key).codes)
+
+
+def codepoint_key_strokes(text: str, entry_mode: str) -> Iterator[str]:
+    """Yield hex digits and named chords for an explicitly selected control."""
+    if entry_mode not in ("richedit-hex", "gtk-hex"):
+        raise ValueError("codepoint entry_mode must be richedit-hex or gtk-hex")
+    if not isinstance(text, str):
+        raise ValueError("text must be a string")
+    for character in text:
+        codepoint = ord(character)
+        if codepoint < 0x20 or 0x7F <= codepoint <= 0x9F:
+            raise ValueError("codepoint entry modes do not support control characters")
+        if 0xD800 <= codepoint <= 0xDFFF:
+            raise ValueError("text must not contain surrogate code points")
+        digits = f"{codepoint:04x}"
+        if entry_mode == "gtk-hex":
+            yield "ctrl-shift-u"
+        yield from digits
+        if entry_mode == "richedit-hex":
+            for _ in digits:
+                yield "shift-left"
+            yield "alt-x"
+        else:
+            yield "enter"

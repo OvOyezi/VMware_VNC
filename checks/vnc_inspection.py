@@ -1,19 +1,34 @@
-"""Synthetic RGB checks for precise VNC frame inspection."""
+"""Synthetic RGB and loopback adapter checks for VNC inspection."""
 from __future__ import annotations
 
 import argparse
+import asyncio
+from contextlib import asynccontextmanager
 import importlib
 import io
 import json
 from pathlib import Path
+import struct
+import subprocess
 import sys
+import tempfile
 import unittest
 
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 from PIL import Image
+
+if __package__:
+    from .vnc_fidelity import _assert_original_hint, _decode_png, _image_payloads, _mcp_environment, _payload, _result_text
+    from .vnc_native_rfb import NativeRfbFixture, _framebuffer_update, _rect
+else:
+    from vnc_fidelity import _assert_original_hint, _decode_png, _image_payloads, _mcp_environment, _payload, _result_text
+    from vnc_native_rfb import NativeRfbFixture, _framebuffer_update, _rect
 
 
 _inspection = None
 _visual = None
+_source_root: Path
 
 
 def _frame(image: Image.Image, x: int = 0, y: int = 0,
@@ -35,6 +50,60 @@ def _open_screenshot(screenshot):
 
 def _packed_rgb(pixels):
     return bytes(channel for pixel in pixels for channel in pixel)
+
+
+def _led_rect(source: str, mask: int) -> bytes:
+    if source == "vmware":
+        return _rect(0, 0, 0, 0, struct.pack("!I", mask), encoding=0x574D5668)
+    return _rect(0, 0, 0, 0, bytes([mask]), encoding=-261)
+
+
+class _InspectionPeer(NativeRfbFixture):
+    def _initial_update_wire(self) -> bytes:
+        initial = super()._initial_update_wire()
+        return _framebuffer_update([_led_rect("vmware", 5), initial[4:]])
+
+    def request_count(self) -> int:
+        with self.lock:
+            return sum(event["type"] == 3 for event in self.events)
+
+    def answer_refresh(self, after: int, color: tuple[int, int, int]) -> None:
+        self.wait_for(lambda events: sum(event["type"] == 3 for event in events) > after, timeout=10)
+        self.send_update([(0, 0, 2, 2, [color] * 4)])
+
+    def send_report(self, source: str, mask: int) -> None:
+        self.send_wire(_framebuffer_update([_led_rect(source, mask)]))
+        self.barrier(b"read-reported-leds")
+
+    def client_input(self) -> list[int]:
+        with self.lock:
+            return [event["type"] for event in self.events if event["type"] in (4, 5, 6)]
+
+
+def _environment() -> dict[str, str]:
+    env = _mcp_environment()
+    env.pop("VNC_URL", None)
+    return env
+
+
+@asynccontextmanager
+async def _mcp_session():
+    params = StdioServerParameters(command=sys.executable, args=[str(_source_root / "main.py"), "mcp"],
+                                   cwd=str(_source_root), env=_environment())
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as stderr:
+        async with asyncio.timeout(30):
+            async with stdio_client(params, errlog=stderr) as streams:
+                async with ClientSession(*streams) as session:
+                    await session.initialize()
+                    yield session
+
+
+def _cli_inspect(peer: _InspectionPeer, cwd: Path, *options: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(_source_root / "main.py"), "inspect",
+         "--host", "127.0.0.1", "--port", str(peer.port), *options],
+        cwd=cwd, env=_environment(), capture_output=True, text=True, encoding="utf-8", timeout=15,
+    )
 
 
 class InspectionChecks(unittest.TestCase):
@@ -192,6 +261,243 @@ class InspectionChecks(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "geometry changed"):
             _inspection.inspect_frame(frame, reference=other)
 
+    async def _connect(self, session: ClientSession, peer: _InspectionPeer) -> dict:
+        result = await session.call_tool("vnc_connect", {
+            "host": "127.0.0.1", "port": peer.port, "session_id": "inspection",
+        })
+        self.assertFalse(result.isError, _result_text(result))
+        return {"session_id": "inspection", "connection_id": _payload(result)["connection_id"]}
+
+    def test_mcp_keyboard_reports_use_latest_leds_without_capture(self):
+        async def run():
+            with _InspectionPeer() as peer:
+                async with _mcp_session() as session:
+                    ids = await self._connect(session, peer)
+                    requested = ["caps_lock", "num_lock", "scroll_lock"]
+                    before = peer.request_count()
+                    for source, expected in (("vmware", [True, False, True]), ("qemu", [False, True, False])):
+                        if source == "qemu":
+                            await asyncio.to_thread(peer.send_report, source, 2)
+                        result = await session.call_tool("vnc_inspect", {**ids, "keyboard_fields": requested})
+                        self.assertFalse(result.isError, _result_text(result))
+                        details, images = _image_payloads(result)
+                        self.assertEqual(details["keyboard"], {
+                            "fields": {name: {"value": value, "source": source} for name, value in zip(requested, expected)},
+                            "unresolved_fields": [],
+                            "visual_evidence": {"available": False, "reason": "all_fields_reported"},
+                        })
+                        self.assertEqual(details["image_order"], [])
+                        self.assertNotIn("frame_id", details)
+                        self.assertEqual(images, {})
+
+                    for extra, message in (
+                        ({"frame_id": "expired"}, "frame_id"),
+                        ({"connection_id": "expired"}, "target changed"),
+                        ({"keyboard_fields": []}, "keyboard_fields"),
+                        ({"keyboard_fields": ["bogus"]}, "keyboard_fields"),
+                        ({"points": []}, "pixel inspection"),
+                        ({"reference_id": "some-reference"}, "pixel inspection"),
+                        ({"detail_region": {"x": 0, "y": 0, "width": 1, "height": 1}}, "pixel inspection"),
+                        ({"zoom": 2}, "pixel inspection"),
+                        ({"pixel_threshold": 1}, "pixel inspection"),
+                    ):
+                        with self.subTest(extra=extra):
+                            result = await session.call_tool("vnc_inspect", {**ids, "keyboard_fields": requested, **extra})
+                            self.assertTrue(result.isError, _result_text(result))
+                            self.assertIn(message, _result_text(result).lower())
+                    await asyncio.to_thread(peer.barrier, b"no-input-or-refresh")
+                    self.assertEqual(peer.request_count(), before)
+                    self.assertEqual(peer.client_input(), [])
+        asyncio.run(run())
+
+    def test_mcp_keyboard_evidence_reuses_original_frame_and_native_crop(self):
+        async def run():
+            with _InspectionPeer() as peer:
+                async with _mcp_session() as session:
+                    ids = await self._connect(session, peer)
+                    unresolved = ["ime_name", "ime_mode", "character_width", "composition"]
+                    fields = [*unresolved, "num_lock"]
+                    before = peer.request_count()
+                    pixel = (52, 138, 203)
+                    result, _ = await asyncio.gather(
+                        session.call_tool("vnc_inspect", {**ids, "keyboard_fields": fields}),
+                        asyncio.to_thread(peer.answer_refresh, before, pixel),
+                    )
+                    self.assertFalse(result.isError, _result_text(result))
+                    details, images = _image_payloads(result)
+                    frame_id = details["frame_id"]
+                    self.assertEqual(details["image_order"], ["current"])
+                    self.assertEqual(set(images), {"current"})
+                    self.assertEqual(details["keyboard"]["unresolved_fields"], unresolved)
+                    self.assertEqual(details["keyboard"]["fields"], {
+                        **{name: {"value": None, "source": None} for name in unresolved},
+                        "num_lock": {"value": False, "source": "vmware"},
+                    })
+                    evidence = details["keyboard"]["visual_evidence"]
+                    self.assertTrue(evidence["available"])
+                    self.assertEqual(evidence["frame_id"], frame_id)
+                    self.assertIn("unambiguous", evidence["instruction"])
+                    self.assertFalse(details["cached_frame"])
+                    _assert_original_hint(self, images["current"][1])
+                    self.assertEqual(_decode_png(images["current"][1]).tobytes(), bytes(pixel) * 4)
+
+                    peer.send_update([(1, 1, 1, 1, [(7, 9, 11)])])
+                    await asyncio.to_thread(peer.barrier, b"newer-wire-pixels")
+                    result = await session.call_tool("vnc_inspect", {
+                        **ids, "keyboard_fields": fields, "frame_id": frame_id,
+                        "region": {"x": 1, "y": 1, "width": 1, "height": 1},
+                    })
+                    self.assertFalse(result.isError, _result_text(result))
+                    details, images = _image_payloads(result)
+                    self.assertTrue(details["cached_frame"])
+                    self.assertEqual(details["keyboard"]["visual_evidence"]["frame_id"], frame_id)
+                    self.assertEqual(set(images), {"current"})
+                    mapping, image = images["current"]
+                    self.assertEqual(mapping["mapping"]["origin_x"], 1)
+                    self.assertEqual(mapping["mapping"]["origin_y"], 1)
+                    self.assertEqual(mapping["mapping"]["scale"], 1)
+                    self.assertEqual(mapping["mapping"]["color_semantics"], "original")
+                    self.assertEqual(_decode_png(image).tobytes(), bytes(pixel))
+
+                    direct = await session.call_tool("vnc_inspect", {
+                        **ids, "frame_id": frame_id, "keyboard_fields": ["num_lock"],
+                    })
+                    self.assertFalse(direct.isError, _result_text(direct))
+                    details, images = _image_payloads(direct)
+                    self.assertEqual(details["keyboard"]["unresolved_fields"], [])
+                    self.assertNotIn("frame_id", details)
+                    self.assertEqual(images, {})
+
+                    normal = await session.call_tool("vnc_inspect", {
+                        **ids, "frame_id": frame_id, "points": [{"x": 1, "y": 1}],
+                    })
+                    self.assertFalse(normal.isError, _result_text(normal))
+                    details, images = _image_payloads(normal)
+                    self.assertNotIn("keyboard", details)
+                    self.assertEqual(details["points"], [{"x": 1, "y": 1, "rgb": list(pixel)}])
+                    self.assertEqual(set(images), {"current", "detail_current"})
+                    await asyncio.to_thread(peer.barrier, b"pinned-did-not-refresh")
+                    self.assertEqual(peer.request_count(), before + 1)
+                    self.assertEqual(peer.client_input(), [])
+        asyncio.run(run())
+
+    def test_mcp_keyboard_keeps_protocol_values_when_framebuffer_unavailable(self):
+        async def run():
+            with _InspectionPeer(width=0, height=0) as peer:
+                async with _mcp_session() as session:
+                    ids = await self._connect(session, peer)
+                    await asyncio.to_thread(peer.wait_for, lambda events: any(event["type"] == 2 for event in events))
+                    unreported = await session.call_tool("vnc_inspect", {
+                        **ids, "keyboard_fields": ["scroll_lock"],
+                    })
+                    self.assertFalse(unreported.isError, _result_text(unreported))
+                    unknown = _payload(unreported)["keyboard"]
+                    self.assertEqual(unknown["fields"], {"scroll_lock": {"value": None, "source": None}})
+                    self.assertEqual(unknown["unresolved_fields"], ["scroll_lock"])
+                    await asyncio.to_thread(peer.send_report, "vmware", 2)
+                    result = await session.call_tool("vnc_inspect", {
+                        **ids, "keyboard_fields": ["num_lock", "ime_mode"],
+                    })
+                    self.assertFalse(result.isError, _result_text(result))
+                    details, images = _image_payloads(result)
+                    self.assertEqual(details["keyboard"], {
+                        "fields": {
+                            "num_lock": {"value": True, "source": "vmware"},
+                            "ime_mode": {"value": None, "source": None},
+                        },
+                        "unresolved_fields": ["ime_mode"],
+                        "visual_evidence": {"available": False, "reason": "framebuffer_unavailable"},
+                    })
+                    self.assertEqual(images, {})
+                    self.assertEqual(peer.request_count(), 0)
+                    self.assertEqual(peer.client_input(), [])
+                    disconnected = await session.call_tool("vnc_disconnect", ids)
+                    self.assertFalse(disconnected.isError, _result_text(disconnected))
+                    inactive = await session.call_tool("vnc_inspect", {
+                        **ids, "keyboard_fields": ["num_lock", "ime_mode"],
+                    })
+                    self.assertTrue(inactive.isError, _result_text(inactive))
+        asyncio.run(run())
+
+    def test_cli_keyboard_selects_png_only_when_needed(self):
+        with tempfile.TemporaryDirectory() as workdir:
+            cwd = Path(workdir)
+            explicit = cwd / "unused"
+            default = cwd / "vnc-inspection"
+            with _InspectionPeer() as peer:
+                direct = _cli_inspect(peer, cwd, "--keyboard-field", "caps_lock",
+                                      "--keyboard-field", "num_lock", "--output-dir", str(explicit))
+                self.assertEqual(direct.returncode, 0, direct.stderr)
+                details = json.loads(direct.stdout)
+                self.assertEqual(details["keyboard"], {
+                    "fields": {"caps_lock": {"value": True, "source": "vmware"},
+                               "num_lock": {"value": False, "source": "vmware"}},
+                    "unresolved_fields": [],
+                    "visual_evidence": {"available": False, "reason": "all_fields_reported"},
+                })
+                self.assertEqual(details["saved"], {})
+                self.assertFalse(explicit.exists())
+                self.assertFalse(default.exists())
+                self.assertEqual(peer.request_count(), 1)
+                self.assertEqual(peer.client_input(), [])
+
+            with _InspectionPeer(width=0, height=0) as peer:
+                unavailable = _cli_inspect(peer, cwd, "--keyboard-field", "ime_mode")
+                self.assertEqual(unavailable.returncode, 0, unavailable.stderr)
+                self.assertEqual(json.loads(unavailable.stdout)["keyboard"]["visual_evidence"], {
+                    "available": False, "reason": "framebuffer_unavailable",
+                })
+                self.assertFalse(default.exists())
+                self.assertEqual(peer.request_count(), 0)
+
+            async def with_image(peer, *options):
+                return await asyncio.gather(
+                    asyncio.to_thread(_cli_inspect, peer, cwd, *options),
+                    asyncio.to_thread(peer.answer_refresh, 1, (12, 34, 56)),
+                )
+
+            with _InspectionPeer() as peer:
+                visual, _ = asyncio.run(with_image(peer, "--keyboard-field", "ime_mode",
+                                                  "--region", "0", "1", "1", "1"))
+                self.assertEqual(visual.returncode, 0, visual.stderr)
+                details = json.loads(visual.stdout)
+                self.assertEqual(details["keyboard"]["fields"], {"ime_mode": {"value": None, "source": None}})
+                self.assertEqual(details["keyboard"]["visual_evidence"]["frame_id"], details["frame_id"])
+                self.assertEqual(details["saved"], {"current": str((default / "current.png").resolve())})
+                self.assertEqual(list(default.iterdir()), [default / "current.png"])
+                with Image.open(default / "current.png") as image:
+                    self.assertEqual(image.format, "PNG")
+                    self.assertEqual(image.size, (1, 1))
+                    self.assertEqual(image.getpixel((0, 0)), (12, 34, 56))
+                self.assertEqual(peer.request_count(), 2)
+                self.assertEqual(peer.client_input(), [])
+
+            with _InspectionPeer() as peer:
+                ordinary, _ = asyncio.run(with_image(peer, "--output-dir", str(explicit), "--point", "0", "1"))
+                self.assertEqual(ordinary.returncode, 0, ordinary.stderr)
+                details = json.loads(ordinary.stdout)
+                self.assertNotIn("keyboard", details)
+                self.assertEqual(details["points"], [{"x": 0, "y": 1, "rgb": [12, 34, 56]}])
+                self.assertEqual(set(details["saved"]), {"current", "detail_current"})
+                self.assertEqual(peer.request_count(), 2)
+
+    def test_cli_keyboard_rejects_pixel_arguments_before_connect(self):
+        with tempfile.TemporaryDirectory() as workdir, _InspectionPeer() as peer:
+            invalid_options = (
+                ("--reference-file", "unused.png"), ("--point", "0", "0"),
+                ("--detail-region", "0", "0", "1", "1"), ("--zoom", "3"),
+                ("--pixel-threshold", "1"),
+            )
+            for options in invalid_options:
+                with self.subTest(options=options):
+                    result = _cli_inspect(peer, Path(workdir), "--keyboard-field", "caps_lock", *options)
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertIn("pixel inspection", result.stderr)
+            ordinary = _cli_inspect(peer, Path(workdir))
+            self.assertEqual(ordinary.returncode, 2, ordinary.stderr)
+            self.assertIn("--output-dir", ordinary.stderr)
+            self.assertEqual(peer.events, [])
+
 
 def _load_modules(source_root: Path):
     package_root = source_root / "src"
@@ -207,16 +513,14 @@ def _load_modules(source_root: Path):
 
 
 def _run_checks() -> dict[str, object]:
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(InspectionChecks)
-    tests = list(suite)
+    if __package__:
+        from ._unittest_report import run_cases
+    else:
+        from _unittest_report import run_cases
+
     output = io.StringIO()
-    result = unittest.TextTestRunner(stream=output, verbosity=2).run(suite)
-    failed_ids = {test.id() for test, _ in (*result.failures, *result.errors)}
-    checks = {
-        test.id().rsplit(".", 1)[-1].removeprefix("test_"): test.id() not in failed_ids
-        for test in tests
-    }
-    report: dict[str, object] = {"success": result.wasSuccessful(), "checks": checks}
+    checks, result = run_cases(InspectionChecks, stream=output)
+    report: dict[str, object] = {"success": result.wasSuccessful(), "checks": checks, "failures": result.failure_details}
     if not result.wasSuccessful():
         report["details"] = output.getvalue()
     return report
@@ -228,9 +532,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", required=True, type=Path, help="JSON report path")
     args = parser.parse_args(argv)
 
-    global _inspection, _visual
+    global _inspection, _visual, _source_root
     try:
-        _inspection, _visual = _load_modules(args.source.resolve())
+        _source_root = args.source.resolve()
+        _inspection, _visual = _load_modules(_source_root)
         report = _run_checks()
     except Exception as exc:
         report = {"success": False, "checks": {"module_loads": False},

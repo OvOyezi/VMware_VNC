@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vmware-vnc"
-version = "1.0.0"
+dynamic = ["version"]
 description = "MCP tools and an auxiliary CLI for reliable AI visual control of VMware virtual machines"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,6 +16,7 @@ dependencies = [
   "pillow==13.0.0",
   "cryptography==50.0.2",
   "websockets==17.3",
+  "pywin32==312; sys_platform == 'win32'",
 ]
 
 [project.urls]
@@ -28,6 +29,9 @@ vmware-vnc = "vmware_vnc.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+
+[tool.setuptools.dynamic]
+version = {attr = "vmware_vnc.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]

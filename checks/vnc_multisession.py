@@ -132,7 +132,7 @@ async def isolation_checks(args, report, a, b, c, auth):
     checks, metrics = report["checks"], report["metrics"]
     async with server(args, "isolation") as session:
         tool_list = await session.list_tools()
-        assert {"vnc_connect", "vnc_screenshot", "vnc_text", "vnc_profiles", "vnc_diagnostics"}.issubset({tool.name for tool in tool_list.tools})
+        assert {"vnc_connect", "vnc_screenshot", "vnc_text", "vnc_type_keys", "vnc_profiles", "vnc_diagnostics"}.issubset({tool.name for tool in tool_list.tools})
         assert all("session_id" in tool.inputSchema["properties"] for tool in tool_list.tools
                    if tool.name not in {"vnc_sessions", "vnc_profiles", "vnc_diagnostics"})
         checks["all_control_tools_expose_explicit_session_routing"] = True
@@ -206,7 +206,7 @@ async def isolation_checks(args, report, a, b, c, auth):
         assert (await call(session, "vnc_status", session_id="alpha"))["display_state"] == "ready"
         checks["network_timeout_on_one_desktop_does_not_block_another"] = True
 
-        blocker = asyncio.create_task(session.call_tool("vnc_type", {"text": "a" * 9, "method": "keys", "delay_ms": 70, **handle(alpha)}))
+        blocker = asyncio.create_task(session.call_tool("vnc_type_keys", {"text": "a" * 9, "delay_ms": 70, **handle(alpha)}))
         await asyncio.sleep(0.05)
         queued = [asyncio.create_task(session.call_tool("vnc_status", {"session_id": "alpha"})) for _ in range(24)]
         await asyncio.sleep(0.02)
@@ -235,7 +235,7 @@ async def isolation_checks(args, report, a, b, c, auth):
 
         before = keys(a, 113)
         request_id = session._request_id
-        typing = asyncio.create_task(session.call_tool("vnc_type", {"text": "q" * 20, "method": "keys", "delay_ms": 70, **handle(alpha)}))
+        typing = asyncio.create_task(session.call_tool("vnc_type_keys", {"text": "q" * 20, "delay_ms": 70, **handle(alpha)}))
         await asyncio.sleep(0.17)
         at_cancel = keys(a, 113) - before
         await cancel(session, request_id, typing)
@@ -264,8 +264,8 @@ async def isolation_checks(args, report, a, b, c, auth):
         assert auth.accepted == auth_accepted_before and (await call(session, "vnc_sessions"))["session_count"] == 2
 
         typed_before = keys(c, ord("m"))
-        default_input = asyncio.create_task(session.call_tool("vnc_type", {
-            "text": "m" * 4, "method": "keys", "delay_ms": 70,
+        default_input = asyncio.create_task(session.call_tool("vnc_type_keys", {
+            "text": "m" * 4, "delay_ms": 70,
         }))
         await until(lambda: keys(c, ord("m")) > typed_before)
         queued_default_status = asyncio.create_task(session.call_tool("vnc_status", {}))
@@ -300,7 +300,7 @@ async def isolation_checks(args, report, a, b, c, auth):
         checks["reused_name_rejects_previous_generation_without_affecting_other_vm"] = True
 
         # Queue a switch and then old work behind a slow action on one named slot.
-        blocker = asyncio.create_task(session.call_tool("vnc_type", {"text": "j" * 5, "method": "keys", "delay_ms": 60, **handle(alpha_new)}))
+        blocker = asyncio.create_task(session.call_tool("vnc_type_keys", {"text": "j" * 5, "delay_ms": 60, **handle(alpha_new)}))
         await asyncio.sleep(0.03)
         switch = asyncio.create_task(session.call_tool("vnc_connect", {"host": "127.0.0.1", "port": a.port, "session_id": "alpha"}))
         await asyncio.sleep(0.03)

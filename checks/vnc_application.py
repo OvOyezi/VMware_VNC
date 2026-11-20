@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
 import importlib
 import json
 import math
@@ -88,6 +87,40 @@ def _tool_payload(result):
 
 
 class ApplicationChecks(unittest.IsolatedAsyncioTestCase):
+    async def test_windows_default_profiles_are_discovered_without_binding_or_reading(self):
+        if os.name != "nt":
+            self.skipTest("Windows default profile discovery")
+        with tempfile.TemporaryDirectory(prefix="vnc-app-default-profile-") as temp:
+            root = Path(temp)
+            default_path = root / "vmware-vnc" / "profiles.toml"
+            default_path.parent.mkdir()
+            default_path.write_text("[invalid TOML; must remain unread", encoding="utf-8")
+            configuration = _config.VNCConfig.from_env({"LOCALAPPDATA": str(root)})
+            self.assertEqual(configuration.profiles_file, str(default_path))
+            explicit = root / "explicit.toml"
+            self.assertEqual(_config.VNCConfig.from_env({
+                "LOCALAPPDATA": str(root), "VNC_PROFILES_FILE": str(explicit),
+            }).profiles_file, str(explicit))
+            self.assertIsNone(_config.VNCConfig.from_env({
+                "LOCALAPPDATA": str(root), "VNC_PROFILES_FILE": "",
+            }).profiles_file)
+            made: list[FakeBackend] = []
+            app = _application.VNCApplication(configuration, _factory("default-profile", made), {})
+            try:
+                with mock.patch.object(_application, "load_profiles", side_effect=AssertionError("eager profile read")):
+                    connected = await app.connect("basic.example", 5900)
+                    self.assertTrue(connected.value["connected"])
+                    self.assertEqual(made[0].target, ("basic.example", 5900, None, None))
+                    with mock.patch("vmware_vnc.diagnostics.get_diagnostics", return_value={}):
+                        diagnostics = await app.diagnostics()
+                    self.assertTrue(diagnostics["profiles_configured"])
+                    self.assertFalse(diagnostics["profiles_loaded"])
+                    self.assertIsNone(app._profiles)
+            finally:
+                await app.close()
+            default_path.unlink()
+            self.assertIsNone(_config.VNCConfig.from_env({"LOCALAPPDATA": str(root)}).profiles_file)
+
     async def test_instances_keep_config_registry_and_targets_isolated(self):
         made_a: list[FakeBackend] = []
         made_b: list[FakeBackend] = []
@@ -430,34 +463,6 @@ print("import/create_server are resource-lazy")
             self.assertIn("resource-lazy", result.stdout)
 
 
-class EvidenceTextResult(unittest.TextTestResult):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.failure_details = []
-
-    def _record(self, test, err):
-        exc_type, exc, tb = err
-        self.failure_details.append({
-            "test": test.id(),
-            "exception_type": f"{exc_type.__module__}.{exc_type.__qualname__}",
-            "message": str(exc),
-            "traceback": "".join(traceback.format_exception(exc_type, exc, tb)),
-        })
-
-    def addFailure(self, test, err):
-        self._record(test, err)
-        super().addFailure(test, err)
-
-    def addError(self, test, err):
-        self._record(test, err)
-        super().addError(test, err)
-
-    def addSubTest(self, test, subtest, err):
-        if err is not None:
-            self._record(test, err)
-        super().addSubTest(test, subtest, err)
-
-
 def _load_modules(source: Path):
     src = source / "src"
     if str(src) not in sys.path:
@@ -470,24 +475,17 @@ def _load_modules(source: Path):
 
 
 def _run_checks() -> dict[str, object]:
-    loader = unittest.defaultTestLoader
-    suite = unittest.TestSuite([
-        loader.loadTestsFromTestCase(ConfigurationChecks),
-        loader.loadTestsFromTestCase(ImportLifecycleChecks),
-        loader.loadTestsFromTestCase(ApplicationChecks),
-    ])
-    tests = []
-    for item in suite:
-        tests.extend(list(item) if isinstance(item, unittest.TestSuite) else [item])
-    result = unittest.TextTestRunner(verbosity=2, resultclass=EvidenceTextResult).run(suite)
-    failed = {detail["test"] for detail in result.failure_details}
-    checks = {
-        test.id().rsplit(".", 1)[-1].removeprefix("test_"): test.id() not in failed
-        for test in tests
-    }
+    if __package__:
+        from ._unittest_report import run_cases
+    else:
+        from _unittest_report import run_cases
+
+    checks, result = run_cases(ConfigurationChecks, ImportLifecycleChecks, ApplicationChecks)
     report: dict[str, object] = {"success": result.wasSuccessful(), "checks": checks}
     if result.failure_details:
         report["failure"] = result.failure_details
+    if result.skipped:
+        report["skipped"] = result.skipped_details
     return report
 
 

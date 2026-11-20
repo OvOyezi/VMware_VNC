@@ -328,7 +328,7 @@ async def mcp_checks(args, report, a, b, auth):
 
                 request_id = session._request_id  # pinned MCP SDK request sequence
                 before = keys(a, 97)
-                typing = asyncio.create_task(session.call_tool("vnc_type", {"text": "a" * 20, "method": "keys", "delay_ms": 80}))
+                typing = asyncio.create_task(session.call_tool("vnc_type_keys", {"text": "a" * 20, "delay_ms": 80}))
                 await asyncio.sleep(0.18)
                 at_cancel = keys(a, 97) - before
                 started = time.monotonic()
@@ -344,13 +344,13 @@ async def mcp_checks(args, report, a, b, auth):
 
                 await connect(a)
                 before = len(a.events)
-                assert (await session.call_tool("vnc_type", {"text": "x" * 30, "method": "keys", "delay_ms": 1000})).isError
+                assert (await session.call_tool("vnc_type_keys", {"text": "x" * 30, "delay_ms": 1000})).isError
                 assert len(a.events) == before
                 assert (await call("vnc_status"))["connected"]
                 checks["impossible_delayed_action_rejected_before_input"] = True
 
                 # A cancelled call waiting for serialization must never execute later.
-                blocker = asyncio.create_task(session.call_tool("vnc_type", {"text": "b" * 6, "method": "keys", "delay_ms": 80}))
+                blocker = asyncio.create_task(session.call_tool("vnc_type_keys", {"text": "b" * 6, "delay_ms": 80}))
                 await asyncio.sleep(0.04)
                 queued_id = session._request_id
                 enter_before = keys(a, 0xFF0D)
@@ -363,7 +363,7 @@ async def mcp_checks(args, report, a, b, auth):
                 checks["cancelled_queued_input_never_runs"] = True
 
                 old_id = (await call("vnc_status"))["connection_id"]
-                blocker = asyncio.create_task(session.call_tool("vnc_type", {"text": "b" * 6, "method": "keys", "delay_ms": 80}))
+                blocker = asyncio.create_task(session.call_tool("vnc_type_keys", {"text": "b" * 6, "delay_ms": 80}))
                 await asyncio.sleep(0.04)
                 switch = asyncio.create_task(session.call_tool("vnc_connect", {"host": "127.0.0.1", "port": b.port}))
                 await asyncio.sleep(0.04)
@@ -408,7 +408,7 @@ async def mcp_checks(args, report, a, b, auth):
                 assert not (await session.call_tool("vnc_screenshot")).isError
                 checks["vnc_auth_rejection_and_fresh_snapshot_password_reuse"] = True
 
-                blocker = asyncio.create_task(session.call_tool("vnc_type", {"text": "b" * 8, "method": "keys", "delay_ms": 80}))
+                blocker = asyncio.create_task(session.call_tool("vnc_type_keys", {"text": "b" * 8, "delay_ms": 80}))
                 await asyncio.sleep(0.04)
                 replies = await asyncio.gather(*(session.call_tool("vnc_status") for _ in range(24)))
                 payload(await blocker)
@@ -726,13 +726,13 @@ def backend_checks(args, report, a, b):
     short_budget.connect("127.0.0.1", a.port)
     before_preflight = len(a.events)
     try:
-        short_budget.send_text("abc", method="keys", focus_x=5, focus_y=5)
+        short_budget.type_text("abc")
         raise AssertionError("minimum typing gaps were not preflighted")
     except ValueError as exc:
         assert "action time budget" in str(exc)
     assert len(a.events) == before_preflight and short_budget.status()["connected"]
     short_budget.disconnect()
-    checks["minimum_typing_gap_budget_rejects_before_focus_or_key_input"] = True
+    checks["minimum_typing_gap_budget_rejects_before_key_input"] = True
 
     candidate = VNCSession(.5, "fresh")
     candidate.connect("127.0.0.1", a.port)
@@ -746,8 +746,13 @@ def backend_checks(args, report, a, b):
             chunk_length = min(chunk_size, 2000 - start)
             result = candidate.type_text("d" * chunk_length)
             assert result == {
+                "submitted_characters": chunk_length,
                 "typed_characters": chunk_length,
                 "effective_key_delay_ms": 20,
+                "transport": "keys",
+                "input_method_sensitive": True,
+                "application_verified": False,
+                "paste_sent": False,
             }
             sent += chunk_length
             wait_for_events_sync(a, lambda events, expected=count + sent: keys(a, 100) >= expected)
@@ -767,7 +772,7 @@ def main():
     args = parser.parse_args()
     args.source, args.output = args.source.resolve(), args.output.resolve()
     report = {"tested_at": datetime.now(timezone.utc).isoformat(), "scope": "Synthetic desktops only; no real desktop input", "checks": {}, "metrics": {}, "success": False}
-    fixtures = [Fixture("deep A", 73), Fixture("deep B", 193), Fixture("deep auth", 109, "test1234")]
+    fixtures = [Fixture("deep A", 73, extended_clipboard=True), Fixture("deep B", 193), Fixture("deep auth", 109, "test1234")]
     try:
         asyncio.run(asyncio.wait_for(mcp_checks(args, report, *fixtures), timeout=25))
         backend_checks(args, report, *fixtures[:2])

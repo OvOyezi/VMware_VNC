@@ -7,6 +7,7 @@ from hashlib import sha256
 from io import BytesIO
 import math
 import struct
+from typing import Literal, get_args
 
 from PIL import Image, ImageChops
 
@@ -19,12 +20,33 @@ MAX_DETAIL_SIDE = 512
 MAX_AUTOMATIC_DETAIL_SIDE = 256
 MAX_POINT_DETAIL_SIDE = 128
 MAX_DETAIL_OUTPUT_PIXELS = 4_194_304
+KeyboardField = Literal["caps_lock", "num_lock", "scroll_lock", "ime_name", "ime_mode", "character_width", "composition"]
+KEYBOARD_FIELDS = get_args(KeyboardField)
+_LOCK_KEYS = {"caps_lock", "num_lock", "scroll_lock"}
 
 
 @dataclass(frozen=True)
 class InspectionResult:
     images: list[tuple[str, Screenshot]]
     details: dict
+
+    @classmethod
+    def original_frame(cls, frame: VisualFrame) -> InspectionResult:
+        width, height = frame.image.size
+        return cls([("current", frame.encode("png", 95))], {
+            "image_metadata": {"current": _image_metadata(frame.x, frame.y, width, height, width, height, 1)},
+        })
+
+
+def keyboard_report(requested: list[KeyboardField], leds: dict[str, str | bool] | None) -> dict:
+    if not isinstance(requested, list) or not requested or any(field not in KEYBOARD_FIELDS for field in requested):
+        raise ValueError("keyboard_fields must be a nonempty list of supported keyboard fields")
+    source = leds.get("source") if leds is not None else None
+    fields = {}
+    for field in requested:
+        value = leds.get(field) if source in ("vmware", "qemu") and field in _LOCK_KEYS else None
+        fields[field] = {"value": value, "source": source} if type(value) is bool else {"value": None, "source": None}
+    return {"fields": fields, "unresolved_fields": [field for field, report in fields.items() if report["value"] is None]}
 
 
 def _require_integer(value: object, name: str, low: int, high: int) -> int:
@@ -260,11 +282,9 @@ def inspect_frame(
             result["delta_rgb"] = [after[i] - before[i] for i in range(3)]
         point_results.append(result)
 
-    images: list[tuple[str, Screenshot]] = [("current", frame.encode("png", 95))]
-    image_metadata: dict[str, dict[str, object]] = {
-        "current": _image_metadata(frame.x, frame.y, frame.image.width, frame.image.height,
-                                    frame.image.width, frame.image.height, 1)
-    }
+    result = InspectionResult.original_frame(frame)
+    images = result.images
+    image_metadata = result.details["image_metadata"]
     if selected_detail is not None:
         x, y, width, height = selected_detail
         current_crop = _rgb_image(_crop_inside_frame(frame, selected_detail))
@@ -289,7 +309,7 @@ def inspect_frame(
                 "altered: per-channel absolute difference multiplied by 16 and clipped to 255",
             )
 
-    details: dict[str, object] = {
+    result.details.update({
         "frame": _frame_details(frame),
         "reference": _frame_details(reference) if reference is not None else None,
         "comparison": comparison,
@@ -298,6 +318,5 @@ def inspect_frame(
         "detail_selection": detail_selection,
         "zoom": zoom,
         "pixel_threshold": pixel_threshold,
-        "image_metadata": image_metadata,
-    }
-    return InspectionResult(images, details)
+    })
+    return result

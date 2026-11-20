@@ -40,4 +40,8 @@ TCP / TLS / WebSocket / WSS
 
 可选来宾 profile 只在显式使用时加载，并绑定 VNC 端点。它仅增强文字输入；基础截图、键鼠和画面条件独立运行。
 
+`VNCSession.send_text` 负责原样粘贴，使用协商的 UTF-8 剪贴板或已绑定的来宾剪贴板。两个文字工具和 CLI 别名都经过这项检查。物理逐键输入由 `VNCSession.type_text` 独立处理。普通 RFB ClientCutText 没有交付确认，显式的剪贴板写入操作仅发送数据包。
+
+控件码位输入复用按键队列和动作预算。RFB 层在当前控制连接上解析 VMware 和 QEMU 的 LED 伪矩形，保存最近报告的三盏灯。元数据更新不产生新画面。敲键接口可据此核对 Caps Lock。检查接口按请求字段读取同一份报告，缺失的字段共用已有的原色截图与裁剪流程，交由调用方判断。明确选用的缓存帧保留自己的帧 ID，视觉判断不写回协议状态。
+
 接口和状态字段见 [操作参考](../references/operations.md)，贡献与验证入口见 [贡献指南](../CONTRIBUTING.md)。

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import math
 import os
+from pathlib import Path
 import re
 from typing import Mapping
 
@@ -69,6 +70,15 @@ class VNCConfig:
             except (TypeError, ValueError, OverflowError):
                 raise ValueError(f"{name} has an invalid numeric value") from None
 
+        profiles_file = env.get("VNC_PROFILES_FILE")
+        if profiles_file is None and os.name == "nt" and env.get("LOCALAPPDATA"):
+            candidate = Path(env["LOCALAPPDATA"]) / "vmware-vnc" / "profiles.toml"
+            try:
+                if candidate.is_absolute() and candidate.is_file():
+                    profiles_file = str(candidate)
+            except OSError:
+                pass  # Discovery of an optional profile must not block a basic VNC connection.
+
         return cls(
             timeout=numeric("VNC_TIMEOUT", "15", float),
             action_timeout=numeric("VNC_ACTION_TIMEOUT", "20", float),
@@ -81,6 +91,6 @@ class VNCConfig:
             default_port=numeric("VNC_PORT", "0", int),
             default_url=env.get("VNC_URL", "").strip(),
             password_env=env.get("VNC_PASSWORD_ENV", "VNC_PASSWORD"),
-            profiles_file=env.get("VNC_PROFILES_FILE") or None,
+            profiles_file=profiles_file or None,
             tls_ca_file=env.get("VNC_TLS_CA_FILE") or None,
         )

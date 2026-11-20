@@ -1,6 +1,6 @@
 # 支持范围
 
-适用于 `1.0.0` 正式版。当前主要面向 VMware 虚拟机。
+适用于 VMware VNC 2.0.0。其他版本的接口以对应标签中的文档为准。
 
 ## 运行条件
 
@@ -33,8 +33,10 @@ TLS 是传输层封装，当前不支持 VeNCrypt 等新增 RFB 安全类型。P
 | 通道 | 使用条件 |
 | --- | --- |
 | 自动选择 `auto` | 已协商 VNC UTF-8 剪贴板，或显式绑定可用的来宾 profile；都没有时在输入前拒绝 |
-| VNC 剪贴板 | Unicode 文字需要服务端协商 Extended Clipboard；普通剪贴板仅支持 Latin-1 |
-| 逐键 `keys` | 显式选择，结果受来宾输入法与目标应用影响；提交后截图核对 |
+| VNC 剪贴板 | 原样粘贴需要服务端协商 UTF-8 Extended Clipboard。普通 Latin-1 ClientCutText 仅供显式写剪贴板 |
+| 物理逐键输入 | `vnc_type_keys` / `type-keys` 向已有焦点发送键盘事件，字符由来宾输入法与目标应用决定 |
+| 仅用键盘输入 Unicode | 已知控件可显式选择 `richedit-hex` 或 `gtk-hex`，需要控件能接收 ASCII 十六进制数字。RichEdit 已在 Windows 10 写字板实测，GTK 码位流程仅做协议回归 |
+| 检查键盘和输入法状态 | 收到 VMware 或 QEMU LED State 后可直读三个锁定键。输入法名称、中英文、全半角和候选状态需要当前画面上有明确指示。多个待确认字段共用一次画面检查 |
 | 可选 VMware 来宾剪贴板 | 需要 `vmrun`、VMware Tools、来宾凭据和对应剪贴板工具 |
 
 Linux 来宾通道可选择 X11 或 Wayland。Wayland/X11 新后端的成功粘贴路径尚未完成实机验收；使用前按目标桌面验证。配置与通道选择见 [文本输入](../references/text-input.md)。

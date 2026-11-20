@@ -20,7 +20,7 @@ from PIL import Image
 from .clipboard import ExtendedClipboard, MAX_CLIPBOARD_BYTES, normalize_newlines
 from .rfb_codec import FrameDecoder, PixelFormat, MAX_FRAME_PIXELS, MAX_RECT_BYTES
 from .frames import FrameBuffer, FrameSnapshot
-from .keys import keysyms
+from .keys import KEYS, keysyms
 from .runtime import RfbRuntime
 from .transport import ByteStream, Endpoint, open_transport
 
@@ -28,9 +28,11 @@ from .transport import ByteStream, Endpoint, open_transport
 EXT_CLIPBOARD = -1063131698
 FENCE = -312
 CONTINUOUS = -313
+VMWARE_LED_STATE = 0x574D5668
+QEMU_LED_STATE = -261
 REQUEST = 0x80000000
 MAX_NAME_BYTES = 65_536
-MAX_UPDATE_RECTS = 65_535
+_LOCK_KEYSYMS = frozenset(KEYS[name] for name in ("capslock", "numlock", "scrolllock"))
 
 class RFBProtocolError(ValueError):
     def __init__(self, code: str) -> None:
@@ -64,6 +66,7 @@ class AsyncRFB:
         self.clipboard_encoding = "iso-8859-1"
         self.protocol_error: str | None = None
         self.snapshot: FrameSnapshot | None = None
+        self._keyboard_leds: tuple[str, int] | None = None
         self._sequence = 0
         self._stream: ByteStream | None = None
         self._frames: FrameBuffer | None = None
@@ -180,7 +183,8 @@ class AsyncRFB:
                    "tight": [7, 0], "hextile": [5, 0], "raw": [0]}
         if self.encoding not in choices:
             raise ValueError("unknown RFB encoding preference")
-        encodings = choices[self.encoding] + [-223, -224, -239, -232, EXT_CLIPBOARD, FENCE, CONTINUOUS]
+        encodings = choices[self.encoding] + [-223, -224, -239, -232, EXT_CLIPBOARD,
+                                              FENCE, CONTINUOUS, VMWARE_LED_STATE, QEMU_LED_STATE]
         await self._write(struct.pack("!BBH", 2, 0, len(encodings)) + struct.pack("!" + "i" * len(encodings), *encodings))
 
     @staticmethod
@@ -221,9 +225,7 @@ class AsyncRFB:
 
     async def _update(self) -> None:
         _, count = struct.unpack("!BH", await self._read(3))
-        if count > MAX_UPDATE_RECTS:
-            raise ValueError("too many RFB rectangles")
-        canvas = await asyncio.to_thread(self._frames.begin_update) if self._frames is not None else None
+        canvas = None
         for _ in range(count):
             x, y, width, height, encoding = struct.unpack("!HHHHi", await self._read(12))
             if encoding == -224:  # LastRect
@@ -250,16 +252,23 @@ class AsyncRFB:
             if encoding == -232:
                 self._pointer_x, self._pointer_y = x, y
                 continue
+            if encoding in (VMWARE_LED_STATE, QEMU_LED_STATE):
+                source, size = ("vmware", 4) if encoding == VMWARE_LED_STATE else ("qemu", 1)
+                flags = int.from_bytes(await self._read(size), "big")
+                self._keyboard_leds = source, flags & 7
+                continue
             if encoding < 0:
                 raise ValueError(f"unsupported RFB pseudo-encoding {encoding}")
-            if canvas is None or not width or not height or x + width > self.width or y + height > self.height:
+            if self._frames is None or not width or not height or x + width > self.width or y + height > self.height:
                 raise ValueError("RFB rectangle is outside the desktop")
+            if canvas is None:
+                canvas = await asyncio.to_thread(self._frames.begin_update)
             box = (x, y, width, height)
             await self._decoder.decode(self._read, canvas, box, encoding,
                                        validate_copy_source=self._frames.validate_copy_source)
             self.wire_encoding = {0: "raw", 1: "copyrect", 5: "hextile", 7: "tight", 16: "zrle"}.get(encoding, str(encoding))
             self._frames.mark_updated(box)
-        if self._frames is None:
+        if self._frames is None or canvas is None:
             return
         snapshot = await asyncio.to_thread(self._frames.publish)
         if snapshot is None:
@@ -352,6 +361,8 @@ class AsyncRFB:
 
     async def key_down(self, key: str) -> None:
         for value in keysyms(key):
+            if value in _LOCK_KEYSYMS:
+                self._keyboard_leds = None
             await self._write(struct.pack("!BB2xI", 4, 1, value))
 
     async def key_up(self, key: str) -> None:
@@ -379,8 +390,6 @@ class AsyncRFB:
         if x is not None:
             self._pointer_x, self._pointer_y = x, y
         if button is not None:
-            if not 1 <= button <= 8:
-                raise ValueError("RFB mouse button must be 1-8")
             mask = 1 << (button - 1)
             self._buttons = self._buttons | mask if down else self._buttons & ~mask
         await self._write(struct.pack("!BBHH", 5, self._buttons, self._pointer_x, self._pointer_y))
@@ -409,6 +418,7 @@ class AsyncRFB:
             except (OSError, ConnectionError, ValueError):
                 pass
         self.closed.set()
+        self._keyboard_leds = None
         self._frame_event.set()
         for future in self._fences.values():
             if not future.done():
@@ -490,6 +500,15 @@ class RFBConnection:
     @property
     def wire_encoding(self) -> str | None:
         return self._state.wire_encoding
+
+    @property
+    def keyboard_leds(self) -> dict[str, str | bool] | None:
+        report = self._state._keyboard_leds
+        if report is None or self.closed.is_set():
+            return None
+        source, flags = report
+        return {"source": source, "caps_lock": bool(flags & 4),
+                "num_lock": bool(flags & 2), "scroll_lock": bool(flags & 1)}
 
     @property
     def width(self) -> int:

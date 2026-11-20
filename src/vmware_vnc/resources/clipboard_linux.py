@@ -48,7 +48,7 @@ def _validate_settings(payload):
         raise ClipboardSetupError("invalid_clipboard_settings")
     if wayland_display is not None and backend == "x11":
         raise ClipboardSetupError("invalid_clipboard_settings")
-    return backend, display, wayland_display
+    return backend, display, wayland_display, authority
 
 
 def _runtime_directory(env, uid, required):
@@ -87,37 +87,35 @@ def owned_xauthority(runtime, uid):
     return str(authorities[0]) if authorities else None
 
 
-def _base_environment(payload):
-    backend, display, _ = _validate_settings(payload)
+def _base_environment(display, authority):
     env = dict(os.environ)
     if display:
         env["DISPLAY"] = display
-    if payload.get("xauthority"):
-        authority = payload["xauthority"]
-        if not isinstance(authority, str) or any(c in authority for c in "\0\r\n"):
-            raise ClipboardSetupError("invalid_clipboard_settings")
-        env["XAUTHORITY"] = authority
-    if display and backend != "wayland":
         # Explicit X11 display takes precedence in auto mode.
         env.pop("WAYLAND_DISPLAY", None)
-    if env.get("DISPLAY") and not env.get("XAUTHORITY") and display:
-        runtime = _runtime_directory(env, os.getuid(), required=False)
+    if authority:
+        env["XAUTHORITY"] = authority
+    if display and not env.get("XAUTHORITY"):
+        uid = os.getuid()
+        runtime = _runtime_directory(env, uid, required=False)
         if runtime is not None:
-            authority = owned_xauthority(runtime, os.getuid())
+            authority = owned_xauthority(runtime, uid)
             if authority:
                 env["XAUTHORITY"] = authority
     return env
 
 
-def _x11_commands(env):
+def _x11_commands(env, utility=None):
     if not env.get("DISPLAY"):
         return None
-    xclip = shutil.which("xclip")
-    if xclip:
-        return [xclip, "-selection", "clipboard", "-in"], [xclip, "-selection", "clipboard", "-out"], "xclip"
-    xsel = shutil.which("xsel")
-    if xsel:
-        return [xsel, "--clipboard", "--input"], [xsel, "--clipboard", "--output"], "xsel"
+    if utility in (None, "xclip"):
+        xclip = shutil.which("xclip")
+        if xclip:
+            return [xclip, "-selection", "clipboard", "-in"], [xclip, "-selection", "clipboard", "-out"], "xclip"
+    if utility in (None, "xsel"):
+        xsel = shutil.which("xsel")
+        if xsel:
+            return [xsel, "--clipboard", "--input"], [xsel, "--clipboard", "--output"], "xsel"
     return None
 
 
@@ -179,44 +177,30 @@ def _configure_wayland(env, uid, explicit_name):
 
 
 def _select_session(payload):
-    backend, display, wayland_display = _validate_settings(payload)
-    env = _base_environment(payload)
-    x11 = _x11_commands(env)
-    wayland = _wayland_commands()
-
-    if backend == "x11":
-        env.pop("WAYLAND_DISPLAY", None)
-        if not env.get("DISPLAY"):
-            raise ClipboardSetupError("x11_display_unavailable")
-        if x11 is None:
-            raise ClipboardSetupError("clipboard_utility_unavailable")
-        return env, x11
-
-    if backend == "wayland":
-        if wayland is None:
-            raise ClipboardSetupError("clipboard_utility_unavailable")
-        return _configure_wayland(env, os.getuid(), wayland_display), wayland
+    backend, display, wayland_display, authority = _validate_settings(payload)
+    env = _base_environment(display, authority)
+    if backend == "x11" and not env.get("DISPLAY"):
+        raise ClipboardSetupError("x11_display_unavailable")
 
     # Auto mode honors a profile's explicit display first. Otherwise, a usable
     # inherited X11 session wins when both desktops are present.
-    if display:
-        env.pop("WAYLAND_DISPLAY", None)
-        if x11 is None:
+    if backend != "wayland":
+        x11 = _x11_commands(env)
+        if x11 is not None:
+            env.pop("WAYLAND_DISPLAY", None)
+            return env, x11
+        if backend == "x11" or display:
             raise ClipboardSetupError("clipboard_utility_unavailable")
-        return env, x11
-    if env.get("DISPLAY") and x11 is not None:
-        env.pop("WAYLAND_DISPLAY", None)
-        return env, x11
-    if wayland is not None:
-        return _configure_wayland(env, os.getuid(), wayland_display), wayland
-    if env.get("DISPLAY"):
+    wayland = _wayland_commands()
+    if wayland is None:
         raise ClipboardSetupError("clipboard_utility_unavailable")
-    raise ClipboardSetupError("clipboard_utility_unavailable")
+    return _configure_wayland(env, os.getuid(), wayland_display), wayland
 
 
 def session_environment(payload):
     """Compatibility helper for inspecting explicit environment adjustments."""
-    return _base_environment(payload)
+    _, display, _, authority = _validate_settings(payload)
+    return _base_environment(display, authority)
 
 
 def clipboard_commands(env, backend=None):
@@ -224,16 +208,7 @@ def clipboard_commands(env, backend=None):
     if backend == "wayland":
         commands = _wayland_commands()
     elif backend in {"x11", "xclip", "xsel"}:
-        commands = _x11_commands(env)
-        if commands is not None and backend in {"xclip", "xsel"} and commands[2] != backend:
-            # Preserve the requested implementation when both X utilities exist.
-            executable = shutil.which(backend)
-            if backend == "xclip" and executable:
-                commands = [executable, "-selection", "clipboard", "-in"], [executable, "-selection", "clipboard", "-out"], backend
-            elif backend == "xsel" and executable:
-                commands = [executable, "--clipboard", "--input"], [executable, "--clipboard", "--output"], backend
-            else:
-                commands = None
+        commands = _x11_commands(env, None if backend == "x11" else backend)
     elif backend is None:
         commands = _x11_commands(env) or (_wayland_commands() if env.get("WAYLAND_DISPLAY") else None)
     else:

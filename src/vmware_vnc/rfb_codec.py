@@ -17,7 +17,6 @@ from PIL import Image, ImageDraw
 
 MAX_FRAME_PIXELS = 16_777_216
 MAX_RECT_BYTES = 64 * 1024 * 1024
-_MAX_TIGHT_COMPACT_LENGTH = (1 << 22) - 1
 
 
 def _checked_dimensions(width: int, height: int) -> int:
@@ -146,13 +145,6 @@ class PixelFormat:
             self._component(pixel, self.bluemax, self.blueshift),
         )
 
-    def _zrle_cpixel_rgb(self, data: bytes | bytearray | memoryview) -> tuple[int, int, int]:
-        size, extra_shift = self._cpixel_layout()
-        if len(data) != size:
-            raise ValueError("invalid ZRLE compressed-pixel size")
-        pixel = int.from_bytes(data, self._byteorder) << extra_shift
-        return self._pixel_rgb(pixel)
-
     def to_rgb(self, data: bytes | bytearray | memoryview, width: int, height: int,
                compact: bool = False) -> Image.Image:
         self.validate()
@@ -163,30 +155,27 @@ class PixelFormat:
         if not isinstance(compact, bool):
             raise ValueError("compact must be a boolean")
 
-        if compact:
-            tight_compact = self._tbytes() == 3
-            pixel_size = 3 if tight_compact else self._cpixel_layout()[0]
-            expected = pixels * pixel_size
-            if len(raw) != expected:
-                raise ValueError(f"pixel data length must be exactly {expected} bytes")
-            if tight_compact:
-                # Tight's 32bpp/depth-24 TPIXEL is explicitly RGB byte order.
-                rgb = raw
-            else:
-                pixel_size, extra_shift = self._cpixel_layout()
-                if pixel_size != self.bytes_per_pixel:
-                    out = bytearray(pixels * 3)
-                    for index in range(pixels):
-                        start = index * pixel_size
-                        pixel = int.from_bytes(raw[start:start + pixel_size], self._byteorder) << extra_shift
-                        out[index * 3:index * 3 + 3] = bytes(self._pixel_rgb(pixel))
-                    rgb = bytes(out)
-                else:
-                    rgb = self._native_to_rgb(raw, pixels)
+        pixel_size, extra_shift = self.bytes_per_pixel, 0
+        tight_compact = compact and self._tbytes() == 3
+        if tight_compact:
+            pixel_size = 3
+        elif compact:
+            pixel_size, extra_shift = self._cpixel_layout()
+        expected = pixels * pixel_size
+        if len(raw) != expected:
+            raise ValueError(f"pixel data length must be exactly {expected} bytes")
+
+        if tight_compact:
+            # Tight's 32bpp/depth-24 TPIXEL is explicitly RGB byte order.
+            rgb = raw
+        elif pixel_size != self.bytes_per_pixel:
+            out = bytearray(pixels * 3)
+            for index in range(pixels):
+                start = index * pixel_size
+                pixel = int.from_bytes(raw[start:start + pixel_size], self._byteorder) << extra_shift
+                out[index * 3:index * 3 + 3] = bytes(self._pixel_rgb(pixel))
+            rgb = bytes(out)
         else:
-            expected = pixels * self.bytes_per_pixel
-            if len(raw) != expected:
-                raise ValueError(f"pixel data length must be exactly {expected} bytes")
             rgb = self._native_to_rgb(raw, pixels)
         return Image.frombytes("RGB", (width, height), rgb)
 
@@ -338,7 +327,7 @@ class _Cursor:
         return self.take(1, label)[0]
 
 
-def _zrle_decompress(stream: Any, compressed: bytes, limit: int = MAX_RECT_BYTES) -> bytes:
+def _zrle_decompress(stream: Any, compressed: bytes, limit: int) -> bytes:
     try:
         raw = stream.decompress(compressed, limit + 1)
     except zlib.error as exc:

@@ -13,6 +13,7 @@ import threading
 import time
 import traceback
 import unittest
+from unittest import mock
 
 
 _rfb = None
@@ -61,7 +62,7 @@ class _ThreadingServer(socketserver.ThreadingTCPServer):
 
 
 class NativeRfbFixture:
-    """Tiny independently authored RFB server for one loopback connection."""
+    """Tiny independently authored RFB server for loopback connections."""
 
     width = 2
     height = 2
@@ -113,7 +114,6 @@ class NativeRfbFixture:
         self.auth_response: bytes | None = None
         self.client_read_chunks = 0
         self.server_write_chunks = 0
-        self.initial_sent = False
         self.server_thread = threading.Thread(
             target=self.listener.serve_forever, kwargs={"poll_interval": 0.02},
             name="native-rfb-loopback", daemon=True,
@@ -143,9 +143,10 @@ class NativeRfbFixture:
             if remaining <= 0 or not self.changed.wait(remaining):
                 raise TimeoutError("loopback RFB fixture did not observe the expected message")
 
-    def send_wire(self, data: bytes, pause: float = 0.0005) -> None:
+    def send_wire(self, data: bytes, pause: float = 0.0005, *, connection: socket.socket | None = None) -> None:
         with self.send_lock:
-            connection = self.connection
+            if connection is None:
+                connection = self.connection
             if connection is None:
                 raise ConnectionError("loopback client has not connected")
             for offset in range(0, len(data), self.write_fragment):
@@ -166,6 +167,13 @@ class NativeRfbFixture:
 
     def send_server_cut_text_length(self, length: int) -> None:
         self.send_wire(b"\x03\x00\x00\x00" + struct.pack("!i", length))
+
+    def barrier(self, marker: bytes) -> None:
+        self.send_wire(struct.pack("!B3xIB", 248, 0x80000001, len(marker)) + marker)
+        self.wait_for(lambda events: any(
+            event.get("type") == 248 and event.get("flags") == 1
+            and event.get("payload") == marker for event in events
+        ))
 
     def drop(self) -> None:
         with self.lock:
@@ -229,7 +237,7 @@ class _RfbHandler(socketserver.BaseRequestHandler):
         return bytes(data)
 
     def _send(self, data: bytes) -> None:
-        self.owner.send_wire(data)
+        self.owner.send_wire(data, connection=self.request)
 
     def _handshake(self) -> bool:
         self._send(self.owner.version)
@@ -327,11 +335,12 @@ class _RfbHandler(socketserver.BaseRequestHandler):
         try:
             if not self._handshake() or not self._server_init():
                 return
+            initial_sent = False
             while not self.owner.stop.is_set():
                 event = self._client_message()
                 self.owner.record(event)
-                if event["type"] == 3 and not self.owner.initial_sent:
-                    self.owner.initial_sent = True
+                if event["type"] == 3 and not initial_sent:
+                    initial_sent = True
                     if self.owner.automatic_initial_update:
                         self._send(self.owner._initial_update_wire())
                 elif event["type"] == 248 and event["flags"] & 0x80000000:
@@ -425,8 +434,308 @@ class NativeRfbChecks(unittest.TestCase):
                         ))
                         self.assertEqual(message["encodings"][:len(encodings)], encodings)
                         self.assertEqual(message["encodings"][len(encodings):],
-                                         [-223, -224, -239, -232, -1063131698, -312, -313])
+                                         [-223, -224, -239, -232, -1063131698, -312, -313,
+                                          0x574D5668, -261])
                         self.assertEqual(client.wire_encoding, "raw")
+                    finally:
+                        client.close()
+
+    def test_keyboard_led_reports_replace_only_reported_state_and_ignore_reserved_bits(self):
+        with NativeRfbFixture() as server:
+            client = self.connect(server)
+            try:
+                self.assertIsNone(client.keyboard_leds)
+                client.key_press("capslock")
+                server.wait_for(lambda events: len(_pixel_events(events, 4)) >= 2)
+                self.assertIsNone(client.keyboard_leds,
+                                  "sending a lock key must not invent a server LED report")
+
+                cases = [
+                    (0x574D5668, "vmware", flags)
+                    for flags in (0, 1, 2, 4, 7, 0xFFFFFFF8, 0x80000004, 0)
+                ] + [
+                    (-261, "qemu", flags) for flags in (0, 1, 2, 4, 7, 0xF8, 0x84, 0)
+                ]
+                for index, (encoding, source, flags) in enumerate(cases):
+                    with self.subTest(source=source, flags=flags):
+                        payload = struct.pack("!I", flags) if source == "vmware" else bytes([flags])
+                        server.send_wire(_framebuffer_update([
+                            _rect(65535, 65535, 0, 0, payload, encoding=encoding),
+                        ]))
+                        server.barrier(f"led-state-{index}".encode("ascii"))
+                        expected = {
+                            "source": source, "caps_lock": bool(flags & 4),
+                            "num_lock": bool(flags & 2), "scroll_lock": bool(flags & 1),
+                        }
+                        observed = client.keyboard_leds
+                        self.assertEqual(observed, expected)
+                        self.assertTrue(all(type(observed[name]) is bool for name in (
+                            "caps_lock", "num_lock", "scroll_lock",
+                        )))
+                        observed["caps_lock"] = "caller mutation"
+                        observed["extra"] = True
+                        self.assertEqual(client.keyboard_leds, expected,
+                                         "each accessor result must be independent")
+
+                events_before = list(server.events)
+                for _ in range(25):
+                    self.assertEqual(client.keyboard_leds, {
+                        "source": "qemu", "caps_lock": False,
+                        "num_lock": False, "scroll_lock": False,
+                    })
+                self.assertEqual(list(server.events), events_before,
+                                 "reading LED state must not send input or request screenshots")
+                client.key_press("numlock")
+                server.wait_for(lambda events: len(_pixel_events(events, 4)) >= 4)
+                self.assertIsNone(client.keyboard_leds)
+                self.assertEqual(client.frame_sequence, 1)
+                self.assertFalse(client.closed.is_set())
+            finally:
+                client.close()
+
+    def test_lock_key_down_invalidates_leds_until_report_without_clearing_on_release(self):
+        cases = [
+            ("capslock", [0xFFE5]), ("numlock", [0xFF7F]), ("scrolllock", [0xFF14]),
+            ("ctrl+capslock", [0xFFE3, 0xFFE5]),
+            ("alt+numlock", [0xFFE9, 0xFF7F]),
+            ("shift+scrolllock", [0xFFE1, 0xFF14]),
+        ]
+        for key, codes in cases:
+            with self.subTest(key=key):
+                with NativeRfbFixture() as server:
+                    client = self.connect(server)
+                    try:
+                        server.send_wire(_framebuffer_update([
+                            _rect(0, 0, 0, 0, struct.pack("!I", 7), encoding=0x574D5668),
+                        ]))
+                        server.barrier(b"lock-before-input")
+                        reported = client.keyboard_leds
+                        client.key_press("a")
+                        client.key_press("ctrl+q")
+                        server.wait_for(lambda events: len(_pixel_events(events, 4)) >= 6)
+                        self.assertEqual(client.keyboard_leds, reported,
+                                         "ordinary keys must retain the received LED report")
+
+                        client.key_down(key)
+                        self.assertIsNone(client.keyboard_leds,
+                                          "lock down must invalidate the old LED report immediately")
+                        client.key_up(key)
+                        self.assertIsNone(client.keyboard_leds,
+                                          "release cannot invent a lock state")
+                        server.send_wire(_framebuffer_update([
+                            _rect(0, 0, 0, 0, b"\x02", encoding=-261),
+                        ]))
+                        server.barrier(b"lock-report-after-release")
+                        self.assertEqual(client.keyboard_leds, {
+                            "source": "qemu", "caps_lock": False,
+                            "num_lock": True, "scroll_lock": False,
+                        })
+
+                        client.key_down(key)
+                        self.assertIsNone(client.keyboard_leds)
+                        server.send_wire(_framebuffer_update([
+                            _rect(0, 0, 0, 0, struct.pack("!I", 4), encoding=0x574D5668),
+                        ]))
+                        server.barrier(b"lock-report-before-release")
+                        client.key_up(key)
+                        self.assertEqual(client.keyboard_leds, {
+                            "source": "vmware", "caps_lock": True,
+                            "num_lock": False, "scroll_lock": False,
+                        }, "key up must preserve a report received after key down")
+                        events = server.wait_for(lambda items: _pixel_events(items, 4)
+                                                 if len(_pixel_events(items, 4)) >= 6 + 4 * len(codes)
+                                                 else None)
+                        expected = [(1, ord("a")), (0, ord("a")),
+                                    (1, 0xFFE3), (1, ord("q")), (0, ord("q")), (0, 0xFFE3)]
+                        stroke = [(1, code) for code in codes] + [(0, code) for code in reversed(codes)]
+                        self.assertEqual([(event["down"], event["keysym"]) for event in events],
+                                         expected + stroke * 2)
+                        self.assertEqual(client.frame_sequence, 1)
+                    finally:
+                        client.close()
+
+    def test_keyboard_led_metadata_does_not_copy_publish_or_satisfy_fresh_capture(self):
+        with NativeRfbFixture() as server:
+            client = self.connect(server)
+            original = client.initial_snapshot()
+            captured = []
+            failures: list[BaseException] = []
+
+            def capture():
+                try:
+                    captured.append(client.capture(timeout=1.2))
+                except BaseException as exc:
+                    failures.append(exc)
+
+            worker = threading.Thread(target=capture, name="led-fresh-capture")
+            try:
+                worker.start()
+                server.wait_for(lambda events: len(_pixel_events(events, 3)) >= 2)
+                frames = client._state._frames
+                with mock.patch.object(frames, "begin_update", wraps=frames.begin_update) as begin, \
+                        mock.patch.object(frames, "publish", wraps=frames.publish) as publish:
+                    server.send_wire(_framebuffer_update([
+                        _rect(0, 0, 0, 0, struct.pack("!I", 4), encoding=0x574D5668),
+                        _rect(0, 0, 1, 1, _wire_pixel((0, 0, 0)) + b"\x80", encoding=-239),
+                        _rect(1, 1, 0, 0, None, encoding=-232),
+                        _rect(0, 0, 0, 0, b"\x02", encoding=-261),
+                        _rect(0, 0, 0, 0, None, encoding=-224),
+                    ]))
+                    server.barrier(b"led-metadata-only")
+                    server.send_wire(_framebuffer_update([]))
+                    server.barrier(b"led-empty-update")
+                    begin.assert_not_called()
+                    publish.assert_not_called()
+                self.assertEqual(client.keyboard_leds, {
+                    "source": "qemu", "caps_lock": False,
+                    "num_lock": True, "scroll_lock": False,
+                })
+                self.assertEqual(client.frame_sequence, 1)
+                self.assertEqual(client.frame_id, original.frame_id)
+                self.assertEqual(client.frame_time, original.received_at)
+                self.assertEqual(client.updated_regions, original.updated_regions)
+                self.assertIs(client._state.snapshot, original)
+                self.assertEqual(captured, [])
+                self.assertEqual(failures, [])
+                self.assertTrue(worker.is_alive(), "metadata must not complete a fresh capture")
+
+                server.send_update([(1, 1, 1, 1, [(210, 120, 30)])])
+                worker.join(timeout=1.5)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(failures, [])
+                self.assertEqual(len(captured), 1)
+                self.assertEqual(captured[0].image.getpixel((1, 1)), (210, 120, 30))
+                self.assertEqual(client.frame_sequence, 2)
+            finally:
+                client.close()
+                worker.join(timeout=1.5)
+
+    def test_keyboard_led_metadata_does_not_initialize_an_unavailable_framebuffer(self):
+        for empty_display in (False, True):
+            with self.subTest(empty_display=empty_display):
+                dimensions = {"width": 0, "height": 0} if empty_display else {}
+                with NativeRfbFixture(automatic_initial_update=False, **dimensions) as server:
+                    client = self.connect(server, timeout=0.15)
+                    try:
+                        self.assertIsNone(client.keyboard_leds)
+                        server.send_wire(_framebuffer_update([
+                            _rect(0, 0, 0, 0, struct.pack("!I", 0), encoding=0x574D5668),
+                        ]))
+                        server.barrier(b"led-without-pixels")
+                        self.assertEqual(client.keyboard_leds, {
+                            "source": "vmware", "caps_lock": False,
+                            "num_lock": False, "scroll_lock": False,
+                        })
+                        self.assertIsNone(client.screen)
+                        self.assertEqual(client.frame_sequence, 0)
+                        self.assertFalse(client.framebuffer_available)
+                        with self.assertRaises(_rfb.FramebufferUnavailable):
+                            client.initial_snapshot()
+                        self.assertEqual(len(_pixel_events(list(server.events), 3)),
+                                         0 if empty_display else 1)
+                        self.assertFalse(client.closed.is_set())
+                    finally:
+                        client.close()
+
+    def test_mixed_keyboard_led_and_pixel_rectangles_publish_one_atomic_frame(self):
+        with NativeRfbFixture() as server:
+            client = self.connect(server)
+            original = client.initial_snapshot()
+            try:
+                first = [
+                    _rect(0, 0, 0, 0, struct.pack("!I", 4), encoding=0x574D5668),
+                    _rect(0, 0, 1, 1, _wire_pixel((201, 31, 41))),
+                    _rect(0, 0, 0, 0, b"\x02", encoding=-261),
+                ]
+                server.send_wire(b"\x00\x00\x00\x05" + b"".join(first))
+                _wait_until(lambda: client.keyboard_leds == {
+                    "source": "qemu", "caps_lock": False,
+                    "num_lock": True, "scroll_lock": False,
+                })
+                self.assertEqual(client.frame_sequence, 1)
+                self.assertIs(client._state.snapshot, original)
+                self.assertEqual(client.screen.getpixel((0, 0)), (10, 20, 30))
+                server.send_wire(
+                    _rect(1, 1, 1, 1, _wire_pixel((211, 51, 61)))
+                    + _rect(0, 0, 0, 0, struct.pack("!I", 0x80000001), encoding=0x574D5668)
+                )
+                server.barrier(b"led-mixed-frame")
+                self.assertEqual(client.frame_sequence, 2)
+                self.assertEqual(client.screen.getpixel((0, 0)), (201, 31, 41))
+                self.assertEqual(client.screen.getpixel((1, 1)), (211, 51, 61))
+                self.assertEqual(client.updated_regions, ((0, 0, 1, 1), (1, 1, 1, 1)))
+                self.assertEqual(client.wire_encoding, "raw")
+                self.assertEqual(client.keyboard_leds, {
+                    "source": "vmware", "caps_lock": False,
+                    "num_lock": False, "scroll_lock": True,
+                })
+                self.assertEqual(original.image.getpixel((0, 0)), (10, 20, 30))
+            finally:
+                client.close()
+
+    def test_keyboard_led_state_is_cleared_on_close_disconnect_and_fresh_connection(self):
+        with NativeRfbFixture() as first:
+            old_client = self.connect(first)
+            try:
+                first.send_wire(_framebuffer_update([
+                    _rect(0, 0, 0, 0, struct.pack("!I", 7), encoding=0x574D5668),
+                ]))
+                first.barrier(b"led-before-close")
+                self.assertTrue(old_client.keyboard_leds["caps_lock"])
+            finally:
+                old_client.close()
+            self.assertIsNone(old_client.keyboard_leds)
+
+        with NativeRfbFixture() as second:
+            new_client = self.connect(second)
+            try:
+                self.assertIsNone(new_client.keyboard_leds)
+                self.assertIsNone(old_client.keyboard_leds)
+                second.send_wire(_framebuffer_update([
+                    _rect(0, 0, 0, 0, b"\x00", encoding=-261),
+                ]))
+                second.barrier(b"led-before-disconnect")
+                self.assertEqual(new_client.keyboard_leds, {
+                    "source": "qemu", "caps_lock": False,
+                    "num_lock": False, "scroll_lock": False,
+                })
+                second.drop()
+                self.assertTrue(new_client.closed.wait(1))
+                self.assertIsNone(new_client.keyboard_leds)
+            finally:
+                new_client.close()
+
+    def test_truncated_keyboard_led_payload_drops_partial_pixels_and_report_state(self):
+        cases = [(0x574D5668, length) for length in range(4)] + [(-261, 0)]
+        for encoding, length in cases:
+            with self.subTest(encoding=encoding, payload_bytes=length):
+                with NativeRfbFixture(write_fragment=4096) as server:
+                    client = self.connect(server)
+                    original = client.initial_snapshot()
+                    try:
+                        server.send_wire(_framebuffer_update([
+                            _rect(0, 0, 0, 0, b"\x07", encoding=-261),
+                        ]))
+                        server.barrier(b"led-before-truncation")
+                        received_before = client.received_bytes
+                        prefix = (b"\x00\x00\x00\x02"
+                                  + _rect(0, 0, 1, 1, _wire_pixel((220, 40, 50)))
+                                  + _rect(0, 0, 0, 0, None, encoding=encoding))
+                        server.send_wire(prefix + b"\x00" * length)
+                        _wait_until(lambda: client.received_bytes >= received_before + len(prefix))
+                        self.assertEqual(client.frame_sequence, 1)
+                        self.assertIs(client._state.snapshot, original)
+                        self.assertEqual(client.screen.getpixel((0, 0)), (10, 20, 30))
+                        self.assertEqual(client.keyboard_leds, {
+                            "source": "qemu", "caps_lock": True,
+                            "num_lock": True, "scroll_lock": True,
+                        })
+                        server.drop()
+                        self.assertTrue(client.closed.wait(1))
+                        self.assertIsNone(client.keyboard_leds)
+                        _wait_until(lambda: client.screen is None)
+                        self.assertIn("IncompleteReadError", client.protocol_error)
+                        self.assertEqual(original.image.getpixel((0, 0)), (10, 20, 30))
                     finally:
                         client.close()
 
@@ -841,29 +1150,6 @@ class NativeRfbChecks(unittest.TestCase):
                 client.close()
 
 
-class EvidenceTextTestResult(unittest.TextTestResult):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.failure_details = []
-
-    def _record(self, test, err):
-        exc_type, exc, tb = err
-        self.failure_details.append({
-            "test": test.id(),
-            "exception_type": f"{exc_type.__module__}.{exc_type.__qualname__}",
-            "message": str(exc),
-            "traceback": "".join(traceback.format_exception(exc_type, exc, tb)),
-        })
-
-    def addFailure(self, test, err):
-        self._record(test, err)
-        super().addFailure(test, err)
-
-    def addError(self, test, err):
-        self._record(test, err)
-        super().addError(test, err)
-
-
 def _load_module(source: Path):
     src = source / "src"
     if str(src) not in sys.path:
@@ -872,16 +1158,12 @@ def _load_module(source: Path):
 
 
 def _run_checks() -> dict[str, object]:
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(NativeRfbChecks)
-    tests = list(suite)
-    result = unittest.TextTestRunner(
-        verbosity=2, resultclass=EvidenceTextTestResult,
-    ).run(suite)
-    failed = {detail["test"] for detail in result.failure_details}
-    checks = {
-        test.id().rsplit(".", 1)[-1].removeprefix("test_"): test.id() not in failed
-        for test in tests
-    }
+    if __package__:
+        from ._unittest_report import run_cases
+    else:
+        from _unittest_report import run_cases
+
+    checks, result = run_cases(NativeRfbChecks)
     return {"success": result.wasSuccessful(), "checks": checks,
             "failures": result.failure_details}
 

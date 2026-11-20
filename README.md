@@ -2,28 +2,19 @@
 
 **让 AI 看见并操作 VMware 虚拟机。**
 
-[![正式版](https://img.shields.io/badge/release-v1.0.0-brightgreen)](https://github.com/OvOyezi/VMware_VNC/releases/tag/v1.0.0)
+[![正式版](https://img.shields.io/badge/release-v2.0.0-brightgreen)](https://github.com/OvOyezi/VMware_VNC/releases/tag/v2.0.0)
 [![checks](https://github.com/OvOyezi/VMware_VNC/actions/workflows/checks.yml/badge.svg)](https://github.com/OvOyezi/VMware_VNC/actions/workflows/checks.yml)
 
-通过 MCP，把虚拟机桌面交给 AI 编程助手：查看真实画面、操作应用、等待界面变化，再核对执行结果。适合需要图形界面的软件操作、界面检查和多虚拟机任务。
+通过 MCP，AI 编程助手可以查看虚拟机桌面、操作应用、等待界面变化并核对执行结果。多个桌面可以同时连接，各自保留操作队列和画面参考。
 
-核心工作方式很直接：**观察画面 → 执行操作 → 等待变化 → 核对结果**。AI 根据每一步的新画面继续工作；VMware VNC 提供截图、输入、画面条件和会话管理工具。
+[下载正式版](https://github.com/OvOyezi/VMware_VNC/releases/tag/v2.0.0) · [快速开始](#快速开始) · [使用示例](#开始使用) · [接口参考](references/operations.md) · [支持范围](docs/COMPATIBILITY.md)
 
-[下载正式版](https://github.com/OvOyezi/VMware_VNC/releases/tag/v1.0.0) · [快速开始](#快速开始) · [使用示例](#开始使用) · [接口参考](references/operations.md) · [支持范围](docs/COMPATIBILITY.md)
-
-## 能帮你做什么
-
-- 操作只有图形界面的应用，打开菜单、调整设置、拖动窗口，并检查最终状态。
-- 检查软件界面和操作结果，比较画面差异，定位像素或局部细节。
-- 等待加载结束、区域发生变化或画面稳定，让 AI 根据观察结果继续操作。
-- 同时处理多台虚拟机，为每个桌面保留独立连接、操作队列和画面参考。
-
-## 为 AI 连续操作而设计
+## 主要能力
 
 | 能力 | 使用价值 |
 | --- | --- |
 | 原生尺寸、无损 PNG | 保留桌面像素与坐标；支持区域截图、精确 RGB 和局部细节检查 |
-| 键鼠与文本输入 | 支持点击、拖动、滚动、组合键，以及按通道条件选择的文字输入 |
+| 键鼠与文字 | 支持点击、拖动、组合键、原样粘贴和整段模拟敲键。键盘灯可直接读取，输入法指示可按需查看局部原图 |
 | 画面条件等待 | 等待变化、参考图匹配或持续稳定，并返回最后有效截图 |
 | 独立会话 | 用会话名与连接 ID 区分桌面和重连，拒绝过期连接上的操作 |
 | 明确的失败状态 | 报告显示不可用、超时和取消；失败输入不自动重放 |
@@ -94,7 +85,7 @@ CLI 每次命令独立连接并在结束后断开。连续多步任务使用 MCP
 ## 使用前了解
 
 - 当前主要面向 VMware 虚拟机，其他平台与 VNC 服务端的正式支持待定。基础操作要求 VNC 认证通过且有可用画面。
-- 中文等文字输入取决于服务端剪贴板能力或可选来宾通道；逐键输入需要显式选择，并受来宾输入法影响。配置见 [文本输入](references/text-input.md)。
+- 命令、路径和中英文混排可用 `vnc_text` 或 CLI `text` 整段粘贴。只有 VNC 键盘时，`vnc_type_keys` 可模拟敲键，也可向已知 RichEdit 或 GTK 控件整批输入 Unicode 码位。从 1.0.0 升级时，原来的 `method="keys"` 调用需要迁移。[文本输入](references/text-input.md)
 - 普通 TCP 和 `ws://` 不加密。跨网络使用时，可选择验证证书的 TLS／WSS 或已有加密通道。
 
 更多环境要求见 [支持范围](docs/COMPATIBILITY.md)，连接和显示问题见 [故障排查](references/troubleshooting.md)。

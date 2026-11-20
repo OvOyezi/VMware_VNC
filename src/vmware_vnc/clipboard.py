@@ -87,13 +87,7 @@ class ExtendedClipboard:
         if actions & CAPS:
             if len(payload) != 4 + formats.bit_count() * 4:
                 raise ValueError("invalid clipboard capabilities")
-            sizes = iter(struct.unpack("!" + "I" * formats.bit_count(), payload[4:]))
-            self.server_text_limit = 0
-            for bit in range(16):
-                if formats & (1 << bit):
-                    size = next(sizes)
-                    if bit == 0:
-                        self.server_text_limit = size
+            self.server_text_limit = struct.unpack_from("!I", payload, 4)[0] if formats & TEXT else 0
             self.server_flags = flags
             return [message(CAPS | TEXT | REQUEST | PEEK | NOTIFY | PROVIDE, struct.pack("!I", 0))], None, False
         if actions not in (REQUEST, PEEK, NOTIFY, PROVIDE):

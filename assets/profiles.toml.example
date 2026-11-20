@@ -1,5 +1,4 @@
-# Local machine configuration: copy outside Git, e.g. .local/profiles.toml.
-# All credentials stay in the environment of the MCP/CLI process.
+# Local configuration: use VNC_PROFILES_FILE, or on Windows %LOCALAPPDATA%/vmware-vnc/profiles.toml.
 version = 1
 
 [profiles.windows-guest]
@@ -11,8 +10,10 @@ guest_os = "windows"
 guest_temp_dir = "C:/Users/guest/AppData/Local/Temp"
 username_env = "VM_WINDOWS_USER"
 password_env = "VM_WINDOWS_PASSWORD"
+# On a Windows host, replace both *_env lines above with a generic credential target:
+# windows_credential_target = "vmware-vnc/windows-guest"
 # Set only for an encrypted VM; omit for an unencrypted VM.
-vm_password_env = "VM_WINDOWS_ENCRYPTION_PASSWORD"
+# vm_password_env = "VM_WINDOWS_ENCRYPTION_PASSWORD"
 
 # A Linux desktop can use standard VNC UTF-8 clipboard without a guest profile.
 # An optional official vmrun fallback needs Python 3 + xclip/xsel or wl-copy/wl-paste.

@@ -167,7 +167,7 @@ async def run(args, report, fixture):
                 report["server_info"] = init.serverInfo.model_dump()
                 tools = await session.list_tools()
                 report["tools"] = [tool.name for tool in tools.tools]
-                required = {"vnc_connect", "vnc_screenshot", "vnc_click", "vnc_type", "vnc_disconnect"}
+                required = {"vnc_connect", "vnc_screenshot", "vnc_click", "vnc_type", "vnc_type_keys", "vnc_disconnect"}
                 assert required.issubset(report["tools"])
                 report["checks"]["mcp_initialize_and_tools"] = True
                 initial = payload(await session.call_tool("vnc_status"))
@@ -206,7 +206,10 @@ async def run(args, report, fixture):
                     assert encoded.size == (64, 48) and encoded.format == "JPEG"
                 report["checks"]["explicit_jpeg_preserves_native_coordinates"] = True
                 payload(await session.call_tool("vnc_keypress", {"key": "ctrl+l"}))
-                payload(await session.call_tool("vnc_type", {"text": "Hi-中\n", "method": "keys"}))
+                typed = payload(await session.call_tool("vnc_type_keys", {"text": "Hi-中\n"}))
+                assert typed["submitted_characters"] == typed["typed_characters"] == len("Hi-中\n")
+                assert typed["transport"] == "keys" and typed["input_method_sensitive"] is True
+                assert typed["application_verified"] is False and typed["paste_sent"] is False
                 await asyncio.sleep(0.1)
                 keys = [e["key"] for e in fixture.events if e["kind"] == "key" and e["down"]]
                 assert 0x01004E2D in keys and 45 in keys and 0xFF0D in keys

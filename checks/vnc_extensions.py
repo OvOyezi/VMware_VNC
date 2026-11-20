@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib
 import importlib.util
 import io
 import json
@@ -519,8 +518,8 @@ class ExtensionChecks(unittest.TestCase):
         self.assertEqual(first.local_text, "only in first connection")
 
     def test_loopback_rfb_caps_notify_provide_unicode_and_key_chain(self):
-        remote_text = "第一行\r\nemoji 🙂\r\n끝"
-        expected_text = "第一行\nemoji 🙂\n끝"
+        remote_text = "English café 中文 العربية e\u0301 🙂👨‍👩‍👧\r\n끝\rthird\nend"
+        expected_text = "English café 中文 العربية e\u0301 🙂👨‍👩‍👧\n끝\nthird\nend"
         fixture = LoopbackRfbClipboardFixture(remote_text)
         session = _client.VNCSession(timeout=3, action_timeout=3)
         try:
@@ -541,6 +540,7 @@ class ExtensionChecks(unittest.TestCase):
             self.assertEqual(client.clipboard_encoding, "utf-8")
             self.assertEqual(session.clipboard_get()["text"], expected_text)
             self.assertTrue(session.status()["capabilities"]["utf8_clipboard"])
+            self.assertEqual(session.status()["capabilities"]["literal_text_transport"], "clipboard")
 
             # Exercise the same connection's key event chain after clipboard negotiation.
             session.keypress("ctrl+l")
@@ -653,7 +653,7 @@ class ExtensionChecks(unittest.TestCase):
             "unused", request_on_paste=True, text_limit=1
         )
         session = _client.VNCSession(timeout=3, action_timeout=3)
-        text = "延迟请求 🙂\r\n第二行\rthird\nend"
+        text = "English café 中文 العربية e\u0301 🙂👨‍👩‍👧\r\n第二行\rthird\nend"
         try:
             fixture.start()
             self.assertTrue(session.connect("127.0.0.1", fixture.port)["connected"])
@@ -673,7 +673,10 @@ class ExtensionChecks(unittest.TestCase):
             self.assertTrue(fixture.paste_key_seen.wait(4))
             self.assertTrue(fixture.request_seen.wait(4))
             self.assertTrue(fixture.client_provide_seen.wait(4))
-            self.assertEqual(fixture.provided_wire_text, _clipboard.wire_text(text))
+            self.assertEqual(
+                fixture.provided_wire_text,
+                "English café 中文 العربية e\u0301 🙂👨‍👩‍👧\r\n第二行\r\nthird\r\nend\0".encode("utf-8"),
+            )
 
             events = fixture.events
             notify_index = next(i for i, event in enumerate(events) if event["kind"] == "client_notify")
@@ -937,111 +940,111 @@ class ExtensionChecks(unittest.TestCase):
         type_text.assert_not_called()
         keypress.assert_not_called()
 
-    def test_held_key_blocks_literal_text_before_input(self):
+    def test_held_input_blocks_physical_typing_without_a_prefix(self):
+        for held_attribute, value in (("_held_keys", "ctrl"), ("_held_buttons", "left")):
+            with self.subTest(held=held_attribute):
+                session = _fake_connected_session()
+                getattr(session, held_attribute).add(value)
+                with mock.patch.object(session, "_call") as send:
+                    with self.assertRaises(ValueError):
+                        session.type_text("plain text")
+                send.assert_not_called()
+
+    def test_held_input_blocks_literal_text_before_clipboard_or_focus(self):
+        for held_attribute, value in (("_held_keys", "ctrl"), ("_held_buttons", "left")):
+            with self.subTest(held=held_attribute):
+                session = _fake_connected_session()
+                session.client.ext_clipboard.server_flags = _clipboard.TEXT | _clipboard.PROVIDE
+                getattr(session, held_attribute).add(value)
+                with mock.patch.object(session, "_check_point") as point, mock.patch.object(
+                    session, "click"
+                ) as click, mock.patch.object(session, "clipboard_set") as clipboard_set, mock.patch.object(
+                    session, "keypress"
+                ) as keypress:
+                    with self.assertRaises(ValueError):
+                        session.send_text("plain text", method="auto", focus_x=5, focus_y=5)
+                point.assert_called_once_with(5, 5)
+                for operation in (click, clipboard_set, keypress):
+                    operation.assert_not_called()
+
+    def test_status_literal_transport_is_none_guest_or_clipboard(self):
         session = _fake_connected_session()
-        session._held_keys.add("ctrl")
-        with mock.patch.object(session, "type_text") as type_text, mock.patch.object(
-            session, "keypress"
-        ) as keypress:
-            with self.assertRaises(ValueError):
-                session.send_text("plain text", method="auto")
-        type_text.assert_not_called()
-        keypress.assert_not_called()
+        self.assertIsNone(session.status()["capabilities"]["literal_text_transport"])
+        session.guest_profile = SimpleNamespace(name="synthetic")
+        self.assertEqual(session.status()["capabilities"]["literal_text_transport"], "guest")
+        session.client.ext_clipboard.server_flags = _clipboard.TEXT | _clipboard.PROVIDE
+        self.assertEqual(session.status()["capabilities"]["literal_text_transport"], "clipboard")
 
-    def test_held_mouse_button_blocks_literal_text_before_focus_or_type(self):
-        session = _fake_connected_session()
-        session._held_buttons.add("left")
-        with mock.patch.object(session, "_check_point") as check_point, mock.patch.object(
-            session, "click"
-        ) as click, mock.patch.object(session, "type_text") as type_text:
-            with self.assertRaises(ValueError):
-                session.send_text("plain text", method="keys", focus_x=5, focus_y=5)
+    def test_clipboard_focus_click_precedes_paste_and_cancelled_wait_prevents_paste(self):
+        for cancelled in (False, True):
+            with self.subTest(cancelled=cancelled):
+                session = _fake_connected_session()
+                session.client.ext_clipboard.server_flags = _clipboard.TEXT | _clipboard.PROVIDE
+                session.client.clipboard_sent.set()
+                control = _operations.ActionControl(time.monotonic() + 5)
+                session._control = control
+                calls = []
 
-        check_point.assert_called_once_with(5, 5)
-        click.assert_not_called()
-        type_text.assert_not_called()
+                def focus_wait(seconds):
+                    calls.append(("wait", seconds))
+                    if cancelled:
+                        control.cancelled.set()
+                        control.check()
 
-    def test_keys_focus_click_precedes_type_and_cancelled_wait_prevents_type(self):
-        session = _fake_connected_session()
-        control = _operations.ActionControl(time.monotonic() + 5)
-        session._control = control
-        calls = []
-        try:
-            with mock.patch.object(session, "_check_point"), mock.patch.object(
-                session, "click", side_effect=lambda *args: calls.append(("click", *args))
-            ), mock.patch.object(
-                control, "wait", side_effect=lambda seconds: calls.append(("wait", seconds))
-            ), mock.patch.object(
-                session, "type_text", side_effect=lambda text: calls.append(("type", text))
-            ) as type_text:
-                result = session.send_text("typed text", method="keys", focus_x=5, focus_y=5)
-            self.assertEqual(result["effective_key_delay_ms"], 20)
-            self.assertEqual(
-                calls,
-                [("click", 5, 5), ("wait", 0.15), ("type", "typed text")],
-            )
-            type_text.assert_called_once_with("typed text")
-        finally:
-            session._control = None
-
-        cancelled_session = _fake_connected_session()
-        cancelled_control = _operations.ActionControl(time.monotonic() + 5)
-        cancelled_session._control = cancelled_control
-        cancelled_calls = []
-
-        def cancel_focus_wait(seconds):
-            cancelled_calls.append(("wait", seconds))
-            cancelled_control.cancelled.set()
-            cancelled_control.check()
-
-        try:
-            with mock.patch.object(cancelled_session, "_check_point"), mock.patch.object(
-                cancelled_session, "click",
-                side_effect=lambda *args: cancelled_calls.append(("click", *args)),
-            ), mock.patch.object(
-                cancelled_control, "wait", side_effect=cancel_focus_wait
-            ) as wait, mock.patch.object(cancelled_session, "type_text") as type_text:
-                with self.assertRaises(_operations.ActionCancelled):
-                    cancelled_session.send_text(
-                        "must not type", method="keys", focus_x=5, focus_y=5
-                    )
-            self.assertEqual(cancelled_calls, [("click", 5, 5), ("wait", 0.15)])
-            wait.assert_called_once_with(0.15)
-            type_text.assert_not_called()
-        finally:
-            cancelled_session._control = None
-
-    def test_send_text_delay_routes_guard_unicode_and_key_only_modes(self):
-        session = _fake_connected_session()
-        cases = (
-            ("auto Unicode delayed", "Unicode 🙂", "auto", True),
-            ("auto ASCII delayed", "ASCII text", "auto", True),
-            ("explicit Unicode keys delayed", "Unicode 🙂", "keys", False),
-            ("guest delayed", "ASCII text", "guest", True),
-            ("clipboard delayed", "ASCII text", "clipboard", True),
-        )
-        for label, text, method, rejected in cases:
-            with self.subTest(case=label):
-                with mock.patch.object(session, "click") as click, mock.patch.object(
-                    session, "type_text"
-                ) as type_text, mock.patch.object(
-                    session, "clipboard_set"
-                ) as clipboard_set, mock.patch.object(session, "keypress") as keypress:
-                    if rejected:
-                        with self.assertRaises(ValueError):
-                            session.send_text(text, method=method, delay_ms=25)
-                        click.assert_not_called()
-                        type_text.assert_not_called()
-                        clipboard_set.assert_not_called()
+                try:
+                    with mock.patch.object(session, "_check_point"), mock.patch.object(
+                        session, "clipboard_set", return_value={"encoding": "utf-8"}
+                    ) as clipboard_set, mock.patch.object(
+                        session, "click", side_effect=lambda *args: calls.append(("click", *args))
+                    ), mock.patch.object(control, "wait", side_effect=focus_wait) as wait, mock.patch.object(
+                        session, "keypress", side_effect=lambda key: calls.append(("paste", key))
+                    ) as keypress:
+                        if cancelled:
+                            with self.assertRaises(_operations.ActionCancelled):
+                                session.send_text("literal text", method="clipboard", focus_x=5, focus_y=5)
+                        else:
+                            result = session.send_text("literal text", method="clipboard", focus_x=5, focus_y=5)
+                            self.assertTrue(result["paste_sent"])
+                    clipboard_set.assert_called_once_with("literal text", require_utf8=True)
+                    expected = [("click", 5, 5), ("wait", 0.15)]
+                    if cancelled:
                         keypress.assert_not_called()
                     else:
-                        result = session.send_text(text, method=method, delay_ms=25)
-                        self.assertEqual(result["transport"], "keys")
-                        self.assertEqual(result["effective_key_delay_ms"], 25)
-                        type_text.assert_called_once_with(text, 25)
-                        click.assert_not_called()
-                        clipboard_set.assert_not_called()
-                        keypress.assert_not_called()
+                        expected.append(("paste", "ctrl-v"))
+                        keypress.assert_called_once_with("ctrl-v")
+                    self.assertEqual(calls, expected)
+                    wait.assert_called_once_with(0.15)
+                finally:
+                    session._control = None
+
+    def test_send_text_rejects_legacy_keys_and_all_delays_before_any_effect(self):
+        session = _fake_connected_session()
+        cases = [(method, delay) for method in ("auto", "clipboard", "guest", "keys")
+                 for delay in (25, -1, True, 0.5)] + [("keys", 0)]
+        for method, delay in cases:
+            with self.subTest(method=method, delay=delay):
+                with mock.patch.object(session, "_check_point") as point, mock.patch.object(
+                    session, "click"
+                ) as click, mock.patch.object(session, "type_text") as type_text, mock.patch.object(
+                    session, "clipboard_set"
+                ) as clipboard_set, mock.patch.object(session, "keypress") as keypress, mock.patch.object(
+                    _client, "VmrunClipboard"
+                ) as guest:
+                    with self.assertRaises(ValueError):
+                        session.send_text("ASCII + 中文 🙂", method=method, delay_ms=delay, focus_x=5, focus_y=5)
+                for operation in (point, click, type_text, clipboard_set, keypress, guest):
+                    operation.assert_not_called()
+
+    def test_explicit_ascii_clipboard_paste_rejects_legacy_before_focus_or_input(self):
+        session = _fake_connected_session()
+        with mock.patch.object(session, "_check_point"), mock.patch.object(session, "click") as click, mock.patch.object(
+            session, "_call"
+        ) as send, mock.patch.object(session, "keypress") as keypress:
+            with self.assertRaises(ValueError):
+                session.send_text("plain ASCII", method="clipboard", focus_x=5, focus_y=5)
+        click.assert_not_called()
+        send.assert_not_called()
+        keypress.assert_not_called()
 
     def test_guest_preparation_failure_does_not_send_paste_key(self):
         session = _fake_connected_session()
@@ -1178,6 +1181,9 @@ def _fake_connected_session():
         latest_clipboard="",
         clipboard_encoding="iso-8859-1",
         protocol_error=None,
+        wire_encoding="raw",
+        fence_supported=False,
+        continuous_supported=False,
     )
     return session
 
@@ -1196,48 +1202,13 @@ def _load_modules(source_root: Path) -> None:
     helper_spec.loader.exec_module(_linux_helper)
 
 
-class EvidenceTextTestResult(unittest.TextTestResult):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.failure_details = []
-
-    def _record_failure(self, test, err, subtest=None):
-        exception_type, exception, _ = err
-        detail = {
-            "test": test.id(),
-            "exception_type": f"{exception_type.__module__}.{exception_type.__qualname__}",
-            "message": str(exception),
-            "traceback": self._exc_info_to_string(err, test),
-        }
-        if subtest is not None:
-            detail["subtest"] = str(subtest)
-        self.failure_details.append(detail)
-
-    def addFailure(self, test, err):
-        self._record_failure(test, err)
-        super().addFailure(test, err)
-
-    def addError(self, test, err):
-        self._record_failure(test, err)
-        super().addError(test, err)
-
-    def addSubTest(self, test, subtest, err):
-        if err is not None:
-            self._record_failure(test, err, subtest)
-        super().addSubTest(test, subtest, err)
-
-
 def _run_checks() -> dict[str, object]:
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(ExtensionChecks)
-    tests = list(suite)
-    result = unittest.TextTestRunner(
-        stream=io.StringIO(), verbosity=2, resultclass=EvidenceTextTestResult
-    ).run(suite)
-    failed_ids = {detail["test"] for detail in result.failure_details}
-    checks = {
-        test.id().rsplit(".", 1)[-1].removeprefix("test_"): test.id() not in failed_ids
-        for test in tests
-    }
+    if __package__:
+        from ._unittest_report import run_cases
+    else:
+        from _unittest_report import run_cases
+
+    checks, result = run_cases(ExtensionChecks, stream=io.StringIO())
     return {
         "success": result.wasSuccessful(),
         "checks": checks,

@@ -310,29 +310,6 @@ class CodecChecks(unittest.TestCase):
                          (0, 0, 2, 1), 5, bad))
 
 
-class EvidenceTextTestResult(unittest.TextTestResult):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.failure_details = []
-
-    def _record(self, test, err):
-        exc_type, exc, tb = err
-        self.failure_details.append({
-            "test": test.id(),
-            "exception_type": f"{exc_type.__module__}.{exc_type.__qualname__}",
-            "message": str(exc),
-            "traceback": "".join(traceback.format_exception(exc_type, exc, tb)),
-        })
-
-    def addFailure(self, test, err):
-        self._record(test, err)
-        super().addFailure(test, err)
-
-    def addError(self, test, err):
-        self._record(test, err)
-        super().addError(test, err)
-
-
 def _load_module(source: Path):
     src = source / "src"
     if str(src) not in sys.path:
@@ -341,16 +318,12 @@ def _load_module(source: Path):
 
 
 def _run_checks() -> dict[str, object]:
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CodecChecks)
-    tests = list(suite)
-    result = unittest.TextTestRunner(
-        verbosity=2, resultclass=EvidenceTextTestResult,
-    ).run(suite)
-    failed = {detail["test"] for detail in result.failure_details}
-    checks = {
-        test.id().rsplit(".", 1)[-1].removeprefix("test_"): test.id() not in failed
-        for test in tests
-    }
+    if __package__:
+        from ._unittest_report import run_cases
+    else:
+        from _unittest_report import run_cases
+
+    checks, result = run_cases(CodecChecks)
     return {"success": result.wasSuccessful(), "checks": checks, "failures": result.failure_details}
 
 

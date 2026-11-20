@@ -20,15 +20,15 @@ TCP / TLS / WebSocket / WSS
 
 | 模块 | 职责 |
 | --- | --- |
-| `application.py` / `config.py` | 应用生命周期、目标解析与配置校验 |
-| `server.py` / `cli.py` | MCP 工具与命令行适配 |
-| `sessions.py` / `operations.py` | 会话注册、连接 ID、队列、取消和空闲回收 |
-| `client.py` | 单桌面的观察与输入 |
-| `runtime.py` / `transport.py` | asyncio 运行时及网络传输 |
-| `rfb.py` / `rfb_codec.py` / `frames.py` | 握手、认证、矩形解码与完整帧发布 |
-| `keys.py` | 按键、组合键与修饰键解析 |
-| `imaging.py` / `inspection.py` / `visual.py` | 图像输出、像素检查、参考比较与画面等待 |
-| `clipboard.py` / `guest.py` / `resources/` | VNC 剪贴板与可选来宾文本通道 |
+| [application.py](../src/vmware_vnc/application.py) / [config.py](../src/vmware_vnc/config.py) / [diagnostics.py](../src/vmware_vnc/diagnostics.py) | 应用生命周期、目标解析、配置校验与运行诊断 |
+| [server.py](../src/vmware_vnc/server.py) / [cli.py](../src/vmware_vnc/cli.py) | MCP 工具与命令行适配 |
+| [sessions.py](../src/vmware_vnc/sessions.py) / [operations.py](../src/vmware_vnc/operations.py) | 会话注册、连接 ID、队列、取消和空闲回收 |
+| [client.py](../src/vmware_vnc/client.py) | 单桌面的观察与输入 |
+| [runtime.py](../src/vmware_vnc/runtime.py) / [transport.py](../src/vmware_vnc/transport.py) | asyncio 运行时及网络传输 |
+| [rfb.py](../src/vmware_vnc/rfb.py) / [rfb_codec.py](../src/vmware_vnc/rfb_codec.py) / [frames.py](../src/vmware_vnc/frames.py) | 握手、认证、矩形解码与完整帧发布 |
+| [keys.py](../src/vmware_vnc/keys.py) | 按键、组合键与修饰键解析 |
+| [imaging.py](../src/vmware_vnc/imaging.py) / [inspection.py](../src/vmware_vnc/inspection.py) / [visual.py](../src/vmware_vnc/visual.py) | 图像输出、像素检查、参考比较与画面等待 |
+| [clipboard.py](../src/vmware_vnc/clipboard.py) / [guest.py](../src/vmware_vnc/guest.py) / [来宾脚本](../src/vmware_vnc/resources/) | VNC 剪贴板与可选来宾文本通道 |
 
 ## 状态与生命周期
 

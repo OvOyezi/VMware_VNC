@@ -39,7 +39,7 @@ pwsh -NoProfile -File "$projectRoot/scripts/Setup.ps1"
 | 进程字段 | 值 |
 | --- | --- |
 | command | 实际安装目录下的 `.venv/Scripts/python.exe` 绝对路径 |
-| args | 实际安装目录下 `main.py` 的绝对路径，以及第二个参数 `mcp` |
+| args | 实际安装目录下[启动入口](../main.py)的绝对路径，以及第二个参数 `mcp` |
 | cwd | 实际安装目录；按宿主支持的方式设置 |
 | env | 按需传入下表的环境变量；基础连接不需要 profile 或来宾凭据 |
 
